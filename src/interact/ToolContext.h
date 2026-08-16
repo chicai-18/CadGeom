@@ -9,6 +9,7 @@
 #include <cadgeom/ITool.h>
 
 #include "core/ObjectTracker.h"
+#include "interact/Snap.h"
 #include "interact/WorkPlane.h"
 
 #include <string>
@@ -35,8 +36,10 @@ struct ToolSettings {
 
 class ToolContext final : public IToolContext {
 public:
+    /// @param snapSource 吸附候选点的来源，由 api/ 实现并注入；为 null 时只剩
+    ///                   网格吸附。
     ToolContext(IScene& scene, IViewport& viewport, ICamera& camera,
-                const ToolSettings& settings);
+                const ToolSettings& settings, const ISnapSource* snapSource);
     ~ToolContext() override;
 
     // -- IToolContext -------------------------------------------------------
@@ -75,6 +78,7 @@ private:
     IViewport& viewport_;
     ICamera& camera_;
     const ToolSettings& settings_;
+    const ISnapSource* snapSource_{nullptr};
 
     double gridSpacing_{1.0};
     std::string status_;

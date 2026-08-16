@@ -6,18 +6,28 @@
 namespace cadgeom::api {
 namespace {
 
-/// Which milestone brings a built-in that is not here yet. Null when the id is
-/// simply not one of ours, which for a host id means "you never registered it".
-const char* PendingMilestone(ToolId id) {
+/// @brief 还没做出来的内置工具，以及它属于哪个里程碑。
+struct PendingTool {
+    const char* name;
+    const char* milestone;
+};
+
+/// @return null 表示这个 id 压根不是内置的 —— 对宿主的 id 来说就是「你没注册过」。
+const PendingTool* PendingBuiltin(ToolId id) {
     switch (id) {
-        case ToolId::Extrude:
-            return "M4, with profile triangulation and solid topology";
-        case ToolId::Move:
-        case ToolId::Rotate:
-        case ToolId::Scale:
-            return "M3, with picking and the transform gizmo";
-        case ToolId::Measure:
-            return "M6, with snapping and the on-screen readout";
+        case ToolId::Extrude: {
+            static const PendingTool pending{"Extrude",
+                                             "M4, with profile triangulation and solid topology"};
+            return &pending;
+        }
+        case ToolId::Scale: {
+            static const PendingTool pending{"Scale", "M6, with the rest of the polish"};
+            return &pending;
+        }
+        case ToolId::Measure: {
+            static const PendingTool pending{"Measure", "M6, with the on-screen readout"};
+            return &pending;
+        }
         default:
             return nullptr;
     }
@@ -54,14 +64,9 @@ CgResult ToolManagerImpl::Activate(ToolId id) {
 
     ITool* tool = Find(id);
     if (!tool) {
-        if (const char* milestone = PendingMilestone(id)) {
+        if (const PendingTool* pending = PendingBuiltin(id)) {
             return core::SetError(CgResult::NotImplemented, "the %s tool arrives in milestone %s",
-                                  id == ToolId::Extrude  ? "Extrude"
-                                  : id == ToolId::Move   ? "Move"
-                                  : id == ToolId::Rotate ? "Rotate"
-                                  : id == ToolId::Scale  ? "Scale"
-                                                         : "Measure",
-                                  milestone);
+                                  pending->name, pending->milestone);
         }
         return core::SetError(CgResult::NotFound, "no tool registered for id %d",
                               static_cast<int>(id));

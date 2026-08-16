@@ -60,8 +60,13 @@ public:
     /// World bounds of everything visible. False when the scene is empty.
     virtual bool GetBounds(Aabb& out) const = 0;
 
-    /// Ray cast against the BVH. Priority is vertex, then edge, then face
-    /// (docs/architecture.md §6.3). False when nothing is hit.
+    /// @brief 对 BVH 投一条射线。优先级是顶点 > 边 > 面（docs/architecture.md §6.3）。
+    /// @param pickFilter PickFilter 位组合；PickFilter_None 表示只问「是哪个对象」，
+    ///                   此时结果的 kind 是 PickKind::Entity。
+    /// @return 没命中为 false。**这不是错误**，不会写进 GetLastError() ——
+    ///         射线打空是最常见的情况，把它当故障会让每帧轮询的宿主读到假告警。
+    /// @note 这个入口没有相机可问，容差按场景包围盒的一个比例取。要按屏幕像素
+    ///       拾取，用 IViewport::Pick()。
     virtual bool Raycast(const Ray& ray, uint32_t pickFilter, PickResult& out) const = 0;
 
     // -- Sub-systems --------------------------------------------------------

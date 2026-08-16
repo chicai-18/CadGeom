@@ -42,9 +42,17 @@ struct PointItem {
 };
 
 struct SceneSnapshot {
-    /// Bumped by the scene whenever anything the renderer cares about changed.
-    /// Equal revisions mean the data on the GPU is still current.
+    /// Bumped by the scene whenever anything the renderer cares about changed,
+    /// including a change of colour or highlight. The api layer rebuilds this
+    /// snapshot when it moves.
     uint64_t revision{0};
+
+    /// @brief 只在顶点真的变了时前进 —— 增删实体、改参数、动变换、改可见性。
+    ///
+    /// 和 `revision` 分开是因为悬停高亮跟着鼠标每一次移动变：它要重建 draw
+    /// item（颜色在里面），但缓冲区里的顶点一个都没动。GpuScene 跟这一个，所以
+    /// 鼠标划过几何不会引发一次全量重传。
+    uint64_t geometryRevision{0};
 
     /// Non-owning; the api layer keeps the geometry alive across the call.
     std::vector<const geom::MeshData*> meshes;

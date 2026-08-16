@@ -73,8 +73,6 @@ public:
 private:
 #if CADGEOM_HAS_VULKAN
     void UpdateSnapshot();
-    /// An entity is drawn only when it and every ancestor is visible.
-    bool IsEffectivelyVisible(EntityId entity) const;
 #endif
 
     core::ObjectTracker tracker_;

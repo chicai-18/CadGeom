@@ -377,6 +377,14 @@ public:
 ```
 面拾取返回 `{ entityId, faceIndex, hitPoint, normal }`——`faceIndex` 让「点某个面 → 设为工作平面 → 在上面画圆 → 拉伸」这条 CAD 核心工作流成立。
 
+M3 的落地细节：
+
+- **优先级是严格的，不比距离。** 一个面总是比它自己的轮廓边先被射线碰到，按距离排就永远选不中边；容差已经保证了「顶点/边就在附近」这件事成立。
+- **像素容差换成世界容差写成 `base + slope * t`。** 正交下 `slope = 0`，透视下 `base = 0`，窄阶段因此不必知道自己在哪种投影里。`IScene::Raycast` 没有相机可问，用的是场景包围盒对角线的一个比例。
+- **没选中不是错误**，不写错误槽——鼠标划过空白是最常见的情况。
+- 承载平面（圆/圆弧/矩形）会作为命中法线返回，所以 `SetWorkPlaneFromPick` 在 M4 的实体做出来之前就能用：点一个圆，就能在它的平面上继续画。
+- **垂足吸附（`Snap_Perpendicular`）没有做**：垂足是相对「上一个点」说的，而 `IToolContext::SnapAt` 的签名已经冻结，没有地方传那个参考点。它随 M6 的吸附面板用扩展接口补上。
+
 ### 6.4 相机
 
 `OrbitCamera`：中键拖拽旋转 / Shift+中键平移 / 滚轮以光标位置为中心缩放 / 双击框选后 Zoom-to-fit。正交与透视可切，正交为默认。
@@ -462,7 +470,7 @@ install/
 | **M0 骨架** ✅ | CMake 工程、submodules、导出宏、`ICadEngine` 空实现、`cadgeom.dll` + demo 链接通过 | demo 能 create/release engine，无泄漏 |
 | **M1 Vulkan 起飞** ✅ | Context/Swapchain/RHI/Renderer、`GridPass`+`MeshPass`、OrbitCamera、ISurface 三后端（Glfw / Win32 / Headless） | 窗口里出现可旋转的网格地面 + 一个立方体 |
 | **M2 几何与线条** ✅ | 内核 + 点/线/圆/矩形、`LinePass`(屏幕空间)、`PointPass`、Tool 状态机、WorkPlane | 鼠标能交互画出点/线/圆/矩形，线宽正确、虚线可用 |
-| **M3 选择与操作** | BVH、Picker（点/边/面优先级）、Selection 高亮、Gizmo、CommandStack | 能选中、拖动、旋转，Ctrl+Z/Y 正常 |
+| **M3 选择与操作** ✅ | BVH、Picker（点/边/面优先级）、Selection 高亮、Gizmo、吸附、CommandStack | 能选中、拖动、旋转，Ctrl+Z/Y 正常 |
 | **M4 拉伸成体** | Profile 三角化、Extrude + Topology、`EdgePass`、`ExtrudeTool` | 圆→圆柱、矩形→立方体，交互式拖拽高度，带轮廓黑边 |
 | **M5 数据 IO** | IoRegistry、OBJ 读写、glTF 读写、`extras` 参数化往返 | 导出再导入，参数化信息不丢；Blender 能正常打开 |
 | **M6 打磨** | 吸附、ImGui 面板、多视口、Zoom-to-fit、单位系统 | 可用性达到「能拿来干活」 |

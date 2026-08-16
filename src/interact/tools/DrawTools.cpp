@@ -44,22 +44,23 @@ public:
         if (!IsLeft(e) || !ctx) {
             return ToolResult::Ignored;
         }
-        IScene* scene = ctx->GetScene();
-        ISelection* selection = scene ? scene->GetSelection() : nullptr;
-        if (!selection) {
-            return ToolResult::Ignored;
-        }
-
-        // The pick itself needs the BVH, which lands in M3. Deliberately not
-        // calling ctx->PickAt() until then: it would report the gap through the
-        // error channel on every single click, and "nothing under the cursor" is
-        // going to be an ordinary answer once picking exists, not a failure.
-        // Clearing on a click into empty space is the half of Select that works
-        // without a BVH, and it is what the M3 version will do in this branch.
-        if ((e.mods & (KeyMod_Ctrl | KeyMod_Shift)) == 0) {
-            selection->Clear();
-        }
+        PickAndSelect(e, ctx);
         return ToolResult::Handled;
+    }
+
+    ToolResult OnMouseMove(const MouseEvent& e, IToolContext* ctx) override {
+        // 预高亮：用户点下去之前就知道会选中什么。不认领这次事件 —— 只是跟踪
+        // 光标的工具没有资格把它吞掉。
+        UpdateHover(e, ctx);
+        return ToolResult::Ignored;
+    }
+
+    void OnDeactivate(IToolContext* ctx) override {
+        // 高亮跟着光标走，换工具之后光标已经不在这里了。
+        if (IScene* scene = ctx ? ctx->GetScene() : nullptr) {
+            scene->GetSelection()->SetHovered(kInvalidEntity);
+        }
+        ToolBase::OnDeactivate(ctx);
     }
 
     ToolResult OnKey(const KeyEvent& e, IToolContext* ctx) override {

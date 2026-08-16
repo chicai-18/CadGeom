@@ -5,6 +5,7 @@
 #include "core/ObjectTracker.h"
 #include "interact/OrbitCamera.h"
 #include "interact/OverlayBuilder.h"
+#include "interact/Picker.h"
 #include "interact/ToolContext.h"
 #include "render/Overlay.h"
 #include "render/Renderer.h"
@@ -73,7 +74,13 @@ private:
     /// Glfw-backed viewport the engine owns the window, so the host never sees
     /// the key at all.
     bool HandleToolKey(const KeyEvent& e);
+    /// @brief Ctrl+Z / Ctrl+Y（以及 Ctrl+Shift+Z）。和工具快捷键在这里的理由
+    ///        一样：Glfw 视口的窗口归引擎所有，宿主根本收不到这个按键。
+    bool HandleEditKey(const KeyEvent& e);
     render::RenderView BuildRenderView() const;
+
+    /// @brief 把像素容差换成拾取用的世界容差模型。
+    interact::PickTolerance PickToleranceFor(double pixels) const;
 
     /// Makes this viewport's context the current one and returns the active
     /// tool, or null when there is none.

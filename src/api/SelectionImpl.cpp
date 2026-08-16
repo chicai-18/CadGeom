@@ -18,7 +18,7 @@ void SelectionImpl::Clear() {
     order_.clear();
     lookup_.clear();
     ClearSubElement();
-    scene_.BumpRevision();
+    scene_.BumpDisplayRevision();
 }
 
 void SelectionImpl::Add(EntityId entity) {
@@ -28,7 +28,7 @@ void SelectionImpl::Add(EntityId entity) {
     if (lookup_.insert(entity.value).second) {
         order_.push_back(entity);
         ClearSubElement();
-        scene_.BumpRevision();
+        scene_.BumpDisplayRevision();
     }
 }
 
@@ -38,7 +38,7 @@ void SelectionImpl::Remove(EntityId entity) {
     }
     order_.erase(std::remove(order_.begin(), order_.end(), entity), order_.end());
     ClearSubElement();
-    scene_.BumpRevision();
+    scene_.BumpDisplayRevision();
 }
 
 void SelectionImpl::Toggle(EntityId entity) {
@@ -61,7 +61,7 @@ void SelectionImpl::Set(CgSpan<const EntityId> entities) {
             }
         }
     }
-    scene_.BumpRevision();
+    scene_.BumpDisplayRevision();
 }
 
 bool SelectionImpl::Contains(EntityId entity) const {
@@ -85,7 +85,7 @@ void SelectionImpl::SetSubElement(PickKind kind, uint32_t subIndex) {
     }
     subKind_ = kind;
     subIndex_ = subIndex;
-    scene_.BumpRevision();
+    scene_.BumpDisplayRevision();
 }
 
 PickKind SelectionImpl::GetSubElementKind() const {
@@ -100,7 +100,7 @@ void SelectionImpl::SetHovered(EntityId entity) {
     const EntityId next = (IsValid(entity) && scene_.Exists(entity)) ? entity : kInvalidEntity;
     if (next != hovered_) {
         hovered_ = next;
-        scene_.BumpRevision();
+        scene_.BumpDisplayRevision();
     }
 }
 

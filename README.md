@@ -6,11 +6,13 @@ standalone.
 
 Design document: [`docs/architecture.md`](docs/architecture.md).
 
-> **Status: milestone M2 (geometry and lines).** The public API is complete and
-> frozen. Working: the Vulkan renderer, the geometry kernel, points/lines/arcs/
-> circles/rectangles/polylines, screen-space line rendering with dash patterns,
-> the work plane, the interactive tools and undo/redo. Not built yet: picking and
-> gizmos (M3), extrude and solids (M4), OBJ/glTF (M5). Calls into those return
+> **Status: milestone M3 (selection and manipulation).** The public API is
+> complete and frozen. Working: the Vulkan renderer, the geometry kernel,
+> points/lines/arcs/circles/rectangles/polylines, screen-space line rendering with
+> dash patterns, the work plane, the interactive tools, ray picking through a BVH
+> with vertex/edge/face priority, geometry snapping, selection highlighting,
+> translate/rotate gizmos and undo/redo. Not built yet: extrude and solids (M4),
+> OBJ/glTF (M5), MSAA and UI panels (M6). Calls into those return
 > `CgResult::NotImplemented` with a message naming the milestone that brings them.
 
 ## Building
@@ -87,9 +89,10 @@ and has no effect on the ABI, so use it or ignore it as you prefer.
 ```
 include/cadgeom/   public headers — the only contract
 src/core/          double math, logging, errors, object tracking
-src/geom/          the kernel: parametric curves, tessellation
+src/geom/          the kernel: parametric curves, tessellation, intersection
+src/scene/         the BVH that picking and snapping query
 src/render/        Vulkan RHI, passes, surfaces
-src/interact/      camera, work plane, tools, overlay
+src/interact/      camera, work plane, picker, snapping, gizmo, tools, overlay
 src/api/           interface implementations + the exported factory
 shaders/           GLSL, compiled to SPIR-V and embedded in the DLL
 examples/          standalone demo
@@ -110,6 +113,11 @@ Dependencies point down only: `api/ → interact/ → scene · io · render → 
 - **Parametric definitions are the source of truth**; meshes are a derived cache.
   Editing a circle's radius regenerates geometry rather than moving triangles.
 - **Every scene mutation is a command**, so undo/redo is not something to retrofit.
+  A whole gizmo drag is one step: the transform changes live, and the command is
+  pushed on mouse-up.
+- **Picking is CPU-side**, a `double` ray against a BVH, so it can distinguish a
+  vertex from an edge from a face and feed snapping — semantics a GPU ID buffer
+  cannot give.
 - The interface obeys a strict ABI discipline (no STL across the boundary, no
   exceptions, append-only vtables) documented in `docs/architecture.md` §2.2 and
   summarised in `CLAUDE.md`.

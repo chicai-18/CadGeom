@@ -4,10 +4,19 @@
 #include "core/Error.h"
 #include "core/Log.h"
 #include "core/Math.h"
+#include "geom/Snap.h"
 
 #include <algorithm>
 
 namespace cadgeom::api {
+namespace {
+
+/// IScene::Raycast 没有相机可问，只好按场景尺寸给一个容差：包围盒对角线的这个
+/// 比例。一个纯几何的射线查询本来就没有「6 个像素」可言，而零容差意味着永远选
+/// 不中一条零厚度的曲线。视口拾取走的是 RaycastWithTolerance，那里有真的像素。
+constexpr double kSceneRelativeTolerance = 0.004;
+
+} // namespace
 
 SceneImpl::SceneImpl()
     : kernel_(geom::CreateSimpleKernel()), selection_(*this), commands_(*this), builder_(*this) {}
@@ -269,13 +278,182 @@ bool SceneImpl::GetBounds(Aabb& out) const {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// 拾取与吸附
+// ---------------------------------------------------------------------------
+
+bool SceneImpl::IsEffectivelyVisible(EntityId entity) const {
+    EntityId cursor = entity;
+    while (IsValid(cursor)) {
+        const EntityImpl* e = FindEntity(cursor);
+        if (!e || !e->IsVisible()) {
+            return false;
+        }
+        cursor = e->GetParent();
+    }
+    return true;
+}
+
+void SceneImpl::RefreshBvh() const {
+    // 跟几何 revision 而不是显示 revision：换个高亮不该让整棵树重建。
+    if (bvhValid_ && bvhRevision_ == geometryRevision_) {
+        return;
+    }
+
+    std::vector<scene::BvhItem> items;
+    items.reserve(order_.size());
+    for (const EntityId id : order_) {
+        const EntityImpl* entity = FindEntity(id);
+        if (!entity || !IsValid(entity->GetShape())) {
+            continue;  // 组节点自己没有几何，它的子节点各自入索引。
+        }
+        EntityStyle style{};
+        entity->GetStyle(style);
+        if (!style.selectable || !IsEffectivelyVisible(id)) {
+            continue;
+        }
+        Aabb bounds{};
+        if (!entity->GetWorldBounds(bounds) || IsEmpty(bounds)) {
+            continue;
+        }
+        items.push_back(scene::BvhItem{id, bounds});
+    }
+
+    const size_t count = items.size();
+    bvh_.Build(std::move(items));
+    bvhRevision_ = geometryRevision_;
+    bvhValid_ = true;
+    CG_TRACE("bvh rebuilt: %zu selectable entities at geometry revision %llu", count,
+             static_cast<unsigned long long>(geometryRevision_));
+}
+
+bool SceneImpl::GetPickTarget(EntityId entity, interact::PickTarget& out) const {
+    const EntityImpl* e = FindEntity(entity);
+    if (!e || !IsValid(e->GetShape())) {
+        return false;
+    }
+
+    // Resolve 会按需细分。它交回来的指针在形状参数变动之前一直有效，而参数一变
+    // 就会推进 revision，正好也是索引重建的时刻。
+    const geom::Shape* shape = LazyKernel().Resolve(e->GetShape());
+    if (!shape) {
+        return false;
+    }
+
+    e->GetWorldTransform(out.world);
+    // 按 positions 判空而不是按 IsEmpty()：一个 Point 图元只有一个顶点、没有
+    // 任何线段，而它恰恰是最该被顶点拾取选中的东西。
+    out.wire = shape->wire.positions.empty() ? nullptr : &shape->wire;
+    out.mesh = shape->mesh.IsEmpty() ? nullptr : &shape->mesh;
+
+    const ShapeParams& params = shape->def.params;
+    switch (params.type) {
+        case ShapeType::Circle:
+            out.planeNormal = params.circle.plane.normal;
+            out.hasPlane = true;
+            break;
+        case ShapeType::Arc:
+            out.planeNormal = params.arc.plane.normal;
+            out.hasPlane = true;
+            break;
+        case ShapeType::Rectangle:
+            out.planeNormal = params.rectangle.plane.normal;
+            out.hasPlane = true;
+            break;
+        default:
+            // 直线、点和多段线没有唯一的承载平面，拾取会退回面向观察者的法线。
+            out.hasPlane = false;
+            break;
+    }
+    return true;
+}
+
+bool SceneImpl::RaycastWithTolerance(const Ray& ray, uint32_t pickFilter,
+                                     const interact::PickTolerance& tolerance,
+                                     PickResult& out) const {
+    RefreshBvh();
+    return interact::Raycast(bvh_, *this, ray, pickFilter, tolerance, out);
+}
+
 bool SceneImpl::Raycast(const Ray& ray, uint32_t pickFilter, PickResult& out) const {
-    (void)ray;
-    (void)pickFilter;
-    (void)out;
-    core::SetError(CgResult::NotImplemented,
-                   "Raycast needs the BVH and the picker, which land in milestone M3");
-    return false;
+    RefreshBvh();
+
+    interact::PickTolerance tolerance{};
+    if (!IsEmpty(bvh_.Bounds())) {
+        tolerance.base = kSceneRelativeTolerance * DiagonalLength(bvh_.Bounds());
+    }
+    return interact::Raycast(bvh_, *this, ray, pickFilter, tolerance, out);
+}
+
+void SceneImpl::CollectSnapCandidates(const Vec3d& center, double radius, uint32_t mask,
+                                      std::vector<interact::SnapCandidate>& out) const {
+    if (!(radius > 0.0) || mask == 0) {
+        return;
+    }
+    RefreshBvh();
+
+    // 先把光标附近的实体拿出来：特征点和交点都要用，而交点还需要两两配对。
+    std::vector<EntityId> nearby;
+    bvh_.QuerySphere(center, radius, [&](const scene::BvhItem& item) {
+        nearby.push_back(item.entity);
+    });
+    if (nearby.empty()) {
+        return;
+    }
+
+    std::vector<geom::SnapPoint> points;
+    for (const EntityId id : nearby) {
+        const EntityImpl* entity = FindEntity(id);
+        if (!entity) {
+            continue;
+        }
+        const geom::Shape* shape = LazyKernel().Resolve(entity->GetShape());
+        if (!shape) {
+            continue;
+        }
+        Mat4d world{};
+        entity->GetWorldTransform(world);
+
+        points.clear();
+        geom::CollectSnapPoints(shape->def, world, mask, points);
+        for (const geom::SnapPoint& point : points) {
+            if (Distance(point.point, center) <= radius) {
+                out.push_back(interact::SnapCandidate{point.type, point.point, id});
+            }
+        }
+    }
+
+    if ((mask & Snap_Intersection) == 0 || nearby.size() < 2) {
+        return;
+    }
+    // 交点是两条曲线的事，所以得配对。附近的实体通常只有两三个，而每条曲线又只
+    // 有落在搜索球里的那几段参与，配对的代价因此是常数级的。
+    std::vector<Vec3d> hits;
+    for (size_t i = 0; i < nearby.size(); ++i) {
+        const EntityImpl* a = FindEntity(nearby[i]);
+        const geom::Shape* shapeA = a ? LazyKernel().Resolve(a->GetShape()) : nullptr;
+        if (!shapeA || shapeA->wire.IsEmpty()) {
+            continue;
+        }
+        Mat4d worldA{};
+        a->GetWorldTransform(worldA);
+
+        for (size_t j = i + 1; j < nearby.size(); ++j) {
+            const EntityImpl* b = FindEntity(nearby[j]);
+            const geom::Shape* shapeB = b ? LazyKernel().Resolve(b->GetShape()) : nullptr;
+            if (!shapeB || shapeB->wire.IsEmpty()) {
+                continue;
+            }
+            Mat4d worldB{};
+            b->GetWorldTransform(worldB);
+
+            hits.clear();
+            geom::IntersectWires(shapeA->wire, worldA, shapeB->wire, worldB, center, radius, hits);
+            for (const Vec3d& hit : hits) {
+                out.push_back(interact::SnapCandidate{Snap_Intersection, hit, nearby[i]});
+            }
+        }
+    }
 }
 
 ISelection* SceneImpl::GetSelection() {

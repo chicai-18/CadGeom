@@ -2,9 +2,12 @@
 
 #include <cadgeom/IViewport.h>
 
+#include <cadgeom/ISelection.h>
+
 #include "core/Error.h"
 #include "core/Log.h"
 #include "interact/tools/DrawTools.h"
+#include "interact/tools/TransformTools.h"
 
 #if CADGEOM_HAS_VULKAN
 #include "api/ViewportImpl.h"
@@ -25,6 +28,15 @@ namespace {
 /// in multi-document hosts.
 std::atomic<uint32_t> g_liveEngines{0};
 
+#if CADGEOM_HAS_VULKAN
+/// 选中与预高亮的颜色。线性光（渲染器在线性空间合成），所以这些数看着比屏幕上
+/// 暗；琥珀色与工具预览是同一族，青色明显不同，两者一眼分得开。
+constexpr Color kSelectedColor{1.00f, 0.42f, 0.05f, 1.0f};
+constexpr Color kHoveredColor{0.30f, 0.72f, 1.00f, 1.0f};
+/// 高亮同时加粗，颜色之外再给一个不依赖辨色能力的信号。
+constexpr float kHighlightWidthScale = 1.6f;
+#endif
+
 } // namespace
 
 EngineImpl::EngineImpl(const EngineDesc& desc)
@@ -40,6 +52,7 @@ EngineImpl::EngineImpl(const EngineDesc& desc)
     // through the same RegisterTool path a host would use — and can be replaced
     // by a host that registers its own under the same id.
     interact::RegisterBuiltinTools(tools_, tools_.Settings());
+    interact::RegisterTransformTools(tools_, tools_.Settings());
     tools_.Activate(ToolId::Select);
 
     CG_INFO("engine created for '%s' (kernel=%s, validation=%s)", appName_.c_str(),
@@ -182,21 +195,6 @@ void EngineImpl::Tick(double deltaSeconds) {
 
 #if CADGEOM_HAS_VULKAN
 
-bool EngineImpl::IsEffectivelyVisible(EntityId entity) const {
-    EntityId cursor = entity;
-    while (IsValid(cursor)) {
-        const EntityImpl* e = scene_.FindEntity(cursor);
-        if (!e) {
-            return false;
-        }
-        if (!e->IsVisible()) {
-            return false;
-        }
-        cursor = e->GetParent();
-    }
-    return true;
-}
-
 void EngineImpl::UpdateSnapshot() {
     const uint64_t revision = scene_.GetRevision();
     if (snapshotValid_ && revision == snapshotRevision_) {
@@ -205,12 +203,14 @@ void EngineImpl::UpdateSnapshot() {
 
     snapshot_.Clear();
     geom::IGeometryKernel& kernel = scene_.Kernel();
+    const ISelection& selection = *scene_.GetSelection();
+    const EntityId hovered = selection.GetHovered();
 
     const uint32_t count = scene_.GetEntityCount();
     for (uint32_t i = 0; i < count; ++i) {
         const EntityId id = scene_.GetEntityAt(i);
         const EntityImpl* entity = scene_.FindEntity(id);
-        if (!entity || !IsValid(entity->GetShape()) || !IsEffectivelyVisible(id)) {
+        if (!entity || !IsValid(entity->GetShape()) || !scene_.IsEffectivelyVisible(id)) {
             continue;
         }
 
@@ -226,6 +226,21 @@ void EngineImpl::UpdateSnapshot() {
         entity->GetWorldTransform(world);
         EntityStyle style{};
         entity->GetStyle(style);
+
+        // 选中和预高亮就是把实体的颜色换掉、把线加粗，不是另开一个 pass：高亮
+        // 要和几何一样被深度测试挡住，而选择集一变就会推进 revision，快照因此
+        // 自然而然地重建（docs/architecture.md §9，M3「Selection 高亮」）。
+        const bool isSelected = selection.Contains(id);
+        const bool isHovered = IsValid(hovered) && id == hovered;
+        if (isSelected) {
+            style.color = kSelectedColor;
+            style.lineWidth *= kHighlightWidthScale;
+            style.pointSize *= kHighlightWidthScale;
+        } else if (isHovered) {
+            style.color = kHoveredColor;
+            style.lineWidth *= kHighlightWidthScale;
+            style.pointSize *= kHighlightWidthScale;
+        }
 
         if (!shape->mesh.IsEmpty()) {
             render::DrawItem item{};
@@ -251,10 +266,9 @@ void EngineImpl::UpdateSnapshot() {
             item.style = style.lineStyle;
             snapshot_.curveItems.push_back(item);
         }
-        if (entity->GetShapeType() == ShapeType::Point) {
-            // Only point shapes draw markers. A polyline's vertices are in the
-            // same buffer and could be drawn the same way, which is what vertex
-            // display and snap highlighting will use in M3.
+        // 点图元一直要画标记；被选中的曲线额外把顶点显示出来，用户因此看得见
+        // 自己能吸附到哪儿 —— 这也是 M3 的顶点拾取在屏幕上的样子。
+        if (entity->GetShapeType() == ShapeType::Point || isSelected) {
             render::PointItem item{};
             item.curveIndex = curveIndex;
             item.worldTransform = world;
@@ -265,6 +279,9 @@ void EngineImpl::UpdateSnapshot() {
     }
 
     snapshot_.revision = revision;
+    // 高亮变化会推进 revision 但不推进这一个，GpuScene 因此不会为了换个颜色重传
+    // 整个场景的顶点。
+    snapshot_.geometryRevision = scene_.GetGeometryRevision();
     snapshotRevision_ = revision;
     snapshotValid_ = true;
 }

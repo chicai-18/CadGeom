@@ -11,8 +11,12 @@
 namespace cadgeom::interact {
 
 ToolContext::ToolContext(IScene& scene, IViewport& viewport, ICamera& camera,
-                         const ToolSettings& settings)
-    : scene_(scene), viewport_(viewport), camera_(camera), settings_(settings) {}
+                         const ToolSettings& settings, const ISnapSource* snapSource)
+    : scene_(scene),
+      viewport_(viewport),
+      camera_(camera),
+      settings_(settings),
+      snapSource_(snapSource) {}
 
 ToolContext::~ToolContext() = default;
 
@@ -46,25 +50,10 @@ bool ToolContext::ScreenToWorkPlane(double x, double y, Vec3d& out) const {
 }
 
 bool ToolContext::SnapAt(double x, double y, SnapResult& out) const {
-    Vec3d raw{};
-    if (!ScreenToWorkPlane(x, y, raw)) {
-        return false;
-    }
-
-    out.type = Snap_None;
-    out.point = raw;
-    out.entity = kInvalidEntity;
-
-    // Grid is the only snap that needs nothing but the work plane. Endpoint,
-    // midpoint, centre, quadrant and intersection all need to know what
-    // geometry is near the cursor, which is the picker's job in M3.
-    if ((settings_.snapMask & Snap_Grid) != 0) {
-        WorkPlane plane{};
-        viewport_.GetWorkPlane(plane);
-        out.point = SnapToGrid(plane, raw, gridSpacing_);
-        out.type = Snap_Grid;
-    }
-    return true;
+    WorkPlane plane{};
+    viewport_.GetWorkPlane(plane);
+    return FindSnap(snapSource_, camera_, plane, x, y, settings_.snapMask,
+                    settings_.tolerancePixels, gridSpacing_, out);
 }
 
 bool ToolContext::PickAt(double x, double y, uint32_t pickFilter, PickResult& out) const {

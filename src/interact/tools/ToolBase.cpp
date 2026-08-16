@@ -1,5 +1,9 @@
 #include "interact/tools/ToolBase.h"
 
+#include <cadgeom/IScene.h>
+#include <cadgeom/ISelection.h>
+#include <cadgeom/IViewport.h>
+
 #include "interact/ToolContext.h"
 
 #include <cmath>
@@ -75,6 +79,53 @@ bool ToolBase::CursorPoint(const MouseEvent& e, IToolContext* ctx, Vec3d& out) {
     // the cursor genuinely is not pointing at the plane — edge-on, or behind the
     // camera. There is no sensible point to report.
     return false;
+}
+
+bool ToolBase::PickAndSelect(const MouseEvent& e, IToolContext* ctx) {
+    IScene* scene = ctx ? ctx->GetScene() : nullptr;
+    ISelection* selection = scene ? scene->GetSelection() : nullptr;
+    if (!selection) {
+        return false;
+    }
+
+    IViewport* viewport = ctx->GetViewport();
+    const uint32_t filter = viewport ? viewport->GetPickFilter() : PickFilter_All;
+    const bool additive = (e.mods & (KeyMod_Ctrl | KeyMod_Shift)) != 0;
+
+    PickResult hit{};
+    if (!ctx->PickAt(e.x, e.y, filter, hit)) {
+        // 点在空白处就是清空选择 —— 每个 CAD 都是这样，而按住修饰键时用户显然
+        // 是在攒一个选择集，一次落空不该把它毁掉。
+        if (!additive) {
+            selection->Clear();
+        }
+        return false;
+    }
+
+    if (additive) {
+        selection->Toggle(hit.entity);
+    } else {
+        selection->Set(CgSpan<const EntityId>{&hit.entity, 1});
+    }
+    // 子元素只在恰好选中一个实体时有意义，SetSubElement 自己会把别的情况挡掉。
+    selection->SetSubElement(hit.kind, hit.subIndex);
+    return true;
+}
+
+bool ToolBase::UpdateHover(const MouseEvent& e, IToolContext* ctx) {
+    IScene* scene = ctx ? ctx->GetScene() : nullptr;
+    ISelection* selection = scene ? scene->GetSelection() : nullptr;
+    if (!selection) {
+        return false;
+    }
+
+    IViewport* viewport = ctx->GetViewport();
+    const uint32_t filter = viewport ? viewport->GetPickFilter() : PickFilter_All;
+
+    PickResult hit{};
+    const bool found = ctx->PickAt(e.x, e.y, filter, hit);
+    selection->SetHovered(found ? hit.entity : kInvalidEntity);
+    return found;
 }
 
 bool ToolBase::BeyondClickSlop(double x0, double y0, double x1, double y1) {

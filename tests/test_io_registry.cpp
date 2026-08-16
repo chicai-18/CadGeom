@@ -256,9 +256,13 @@ TEST_CASE("the tool manager owns registered tools", "[tools]") {
         CHECK(tools.GetActiveTool() == ToolId::Select);
         CHECK(CgSucceeded(tools.Activate(ToolId::Circle)));
 
-        // Tools that need picking or solids say which milestone brings them.
-        CHECK(tools.Activate(ToolId::Move) == CgResult::NotImplemented);
+        // M3 brought the gizmo, so Move and Rotate are real tools now.
+        CHECK(CgSucceeded(tools.Activate(ToolId::Move)));
+        CHECK(CgSucceeded(tools.Activate(ToolId::Rotate)));
+
+        // The ones still to come say which milestone brings them.
         CHECK(tools.Activate(ToolId::Extrude) == CgResult::NotImplemented);
+        CHECK(tools.Activate(ToolId::Scale) == CgResult::NotImplemented);
         // An id nobody registered is simply not there.
         CHECK(tools.Activate(static_cast<ToolId>(0x2000)) == CgResult::NotFound);
 

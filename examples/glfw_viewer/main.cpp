@@ -1,18 +1,19 @@
-// CadGeom demo host — milestones M0 through M2.
+// CadGeom demo host — milestones M0 through M3.
 //
 // Two phases, deliberately separate:
 //
 //   1. A pass over the public surface with no GPU in sight: the scene graph, the
-//      geometry kernel, undo. This is M0's acceptance test — create, exercise,
-//      release, prove nothing leaked — and it is bracketed by a CRT heap
-//      checkpoint, so it has to stay free of anything that allocates behind the
-//      engine's back.
+//      geometry kernel, picking, undo. This is M0's acceptance test — create,
+//      exercise, release, prove nothing leaked — and it is bracketed by a CRT
+//      heap checkpoint, so it has to stay free of anything that allocates behind
+//      the engine's back.
 //   2. A viewport: a window, a grid, an orbit camera, a drawing made of points,
-//      lines, circles and rectangles, and the tools that create them. Run with
-//      --headless it renders off-screen and writes a PNG instead, which is how
-//      the renderer gets verified on a machine with no display — and it drives
-//      the tools through synthetic mouse events, so interactive creation is
-//      checked there too rather than only by hand.
+//      lines, circles and rectangles, the tools that create them, and the
+//      select/move/rotate gestures that edit them. Run with --headless it
+//      renders off-screen and writes a PNG instead, which is how the renderer
+//      gets verified on a machine with no display — and it drives the tools
+//      through synthetic mouse events, so interactive creation and the gizmo
+//      are checked there too rather than only by hand.
 //
 // Note what this file does *not* link: GLFW. The window belongs to the engine
 // (SurfaceKind::Glfw), and the host only forwards a frame loop.
@@ -274,15 +275,38 @@ bool RunApiWalk(cadgeom::ICadEngine& engine) {
     ok &= Check(CgSucceeded(commands->Undo()) && scene->Exists(circle),
                 "and deleting is undoable too");
 
+    Section("Picking");
+    // 一条垂直打向上面那个 25 mm 圆的射线。拾取是 CPU 对着 BVH 做的，全程不需要
+    // 任何设备（§6.3）。
+    PickResult hit{};
+    ok &= Check(scene->Raycast(Ray{Vec3d{25, 0, 100}, Vec3d{0, 0, -1}}, PickFilter_All, hit) &&
+                    hit.entity == circle,
+                "a ray finds the circle it passes through");
+    ok &= Check(hit.kind == PickKind::Edge || hit.kind == PickKind::Vertex,
+                "and resolves which sub-element it hit");
+    ok &= Check(std::abs(hit.normal.z) > 0.9,
+                "a planar curve reports its own plane as the hit normal");
+
+    // 没选中是一个普通答案，不是失败：它不能在错误槽里留下东西，否则宿主每帧
+    // 轮询悬停都会读到一条假故障。
+    PickResult miss{};
+    engine.ClearLastError();
+    ok &= Check(!scene->Raycast(Ray{Vec3d{500, 500, 100}, Vec3d{0, 0, -1}}, PickFilter_All, miss) &&
+                    engine.GetLastError() == CgResult::Ok,
+                "an empty region reports no hit and no error");
+
+    ISelection* pickSelection = scene->GetSelection();
+    pickSelection->Set(CgSpan<const EntityId>{&hit.entity, 1});
+    pickSelection->SetSubElement(hit.kind, hit.subIndex);
+    ok &= Check(pickSelection->Contains(circle) &&
+                    pickSelection->GetSubElementKind() == hit.kind,
+                "the pick drives the selection, sub-element and all");
+    pickSelection->Clear();
+
     Section("Not built yet");
     ExtrudeOptions extrudeOptions{};
     if (!IsValid(builder->Extrude(circle, Vec3d{0, 0, 1}, 30.0, extrudeOptions))) {
         Pending("Extrude", engine);
-    }
-
-    PickResult hit{};
-    if (!scene->Raycast(Ray{Vec3d{0, 0, 100}, Vec3d{0, 0, -1}}, PickFilter_All, hit)) {
-        Pending("Raycast", engine);
     }
 
     ExportOptions exportOptions{};
@@ -306,7 +330,9 @@ void PrintCameraHelp() {
                 "  wheel        zoom at cursor  double middle-click        zoom to fit\n"
                 "  1..7         standard views  F fit   P ortho/persp   G grid   W wireframe\n"
                 "  V select  X point  L line  C circle  R rectangle  Y polyline  Esc cancel\n"
-                "  Del        delete the selection (Ctrl+Z / Ctrl+Y are host-side)\n");
+                "  M move    T rotate  — click an object, then drag an axis, plane or ring\n"
+                "  ctrl+click / shift+click  add to the selection    Del  delete it\n"
+                "  Ctrl+Z undo   Ctrl+Y (or Ctrl+Shift+Z) redo\n");
 }
 
 /// Applies a style to one entity, since EntityStyle is set wholesale.
@@ -438,9 +464,43 @@ bool DriveTools(cadgeom::ICadEngine& engine, cadgeom::IViewport& viewport) {
                 "an interactively drawn shape undoes like any other");
     scene.GetCommandStack()->Redo();
 
-    // Left mid-gesture on purpose: the circle below never becomes a shape, it
-    // just shows up in the overlay for the screenshot. Preview geometry never
-    // enters the scene and never enters the undo stack (§6.2).
+    // -- M3：吸附 -----------------------------------------------------------
+    //
+    // 对着一个已知的孔心「点歪」几个像素。默认吸附掩码里有端点和圆心，所以工具
+    // 拿到的应该是那个孔心本身，而不是光标底下的那个近似位置。
+    {
+        const double angle = 45.0 * 3.14159265358979323846 / 180.0;
+        const Vec3d holeCentre{45.0 * std::cos(angle), 45.0 * std::sin(angle), 0.0};
+        Vec2d holePixel{};
+        if (camera.WorldToScreen(holeCentre, holePixel)) {
+            const auto nudged = [&](double dx, double dy, MouseAction action) {
+                MouseEvent e{};
+                e.button = MouseButton::Left;
+                e.action = action;
+                e.x = holePixel.x + dx;
+                e.y = holePixel.y + dy;
+                return viewport.OnMouseEvent(e);
+            };
+
+            tools.Activate(ToolId::Line);
+            nudged(3.0, -2.0, MouseAction::Move);
+            nudged(3.0, -2.0, MouseAction::Down);
+            nudged(3.0, -2.0, MouseAction::Up);
+            send(Vec3d{80, 0, 0}, MouseAction::Move);
+            send(Vec3d{80, 0, 0}, MouseAction::Down);
+
+            ShapeParams snapped{};
+            const EntityId snappedLine = scene.GetEntityAt(scene.GetEntityCount() - 1);
+            ok &= Check(scene.GetGeometryBuilder()->GetParams(snappedLine, snapped) &&
+                            snapped.type == ShapeType::Line &&
+                            std::abs(snapped.line.start.x - holeCentre.x) < 1e-9 &&
+                            std::abs(snapped.line.start.y - holeCentre.y) < 1e-9,
+                        "a click near a hole centre snapped exactly onto it");
+            scene.GetCommandStack()->Undo();
+        }
+    }
+
+    // 有意停在半途：这个圆永远不会变成形状。预览几何既不进场景也不进撤销栈（§6.2）。
     ok &= Check(CgSucceeded(tools.Activate(ToolId::Circle)), "activated the circle tool");
     send(Vec3d{40, 55, 0}, MouseAction::Move);
     send(Vec3d{40, 55, 0}, MouseAction::Down);
@@ -448,6 +508,82 @@ bool DriveTools(cadgeom::ICadEngine& engine, cadgeom::IViewport& viewport) {
     ok &= Check(scene.GetEntityCount() == before + 2,
                 "a rubber-band preview stays out of the scene");
 
+    // -- M3：先选中，再拖 Gizmo ---------------------------------------------
+    //
+    // Gizmo 的手柄是按固定像素尺寸摆在屏幕空间里的，所以宿主要瞄准一个手柄，办法
+    // 是把它的原点投到屏幕上、再沿投影后的轴走几个像素。这不需要知道引擎内部的手柄
+    // 尺寸 —— 真实用户的鼠标掌握的信息也就这么多。
+    ISelection& selection = *scene.GetSelection();
+    ok &= Check(CgSucceeded(tools.Activate(ToolId::Select)), "activated the select tool");
+
+    // 点在上面那条线身上。
+    send(Vec3d{0, -60, 0}, MouseAction::Move);
+    send(Vec3d{0, -60, 0}, MouseAction::Down);
+    send(Vec3d{0, -60, 0}, MouseAction::Up);
+    ok &= Check(selection.GetCount() == 1, "clicking an object selected it");
+    const EntityId picked = selection.GetAt(0);
+
+    Aabb selectionBounds{};
+    ok &= Check(selection.GetBounds(selectionBounds), "the selection reports its bounds");
+    const Vec3d gizmoOrigin{(selectionBounds.min.x + selectionBounds.max.x) * 0.5,
+                            (selectionBounds.min.y + selectionBounds.max.y) * 0.5,
+                            (selectionBounds.min.z + selectionBounds.max.z) * 0.5};
+
+    Transform beforeDrag{};
+    scene.GetEntity(picked)->GetLocalTransform(beforeDrag);
+
+    // +X 手柄在屏幕上的方向。沿轴取任意一段世界偏移都行 —— 这里只要方向。
+    Vec2d originPixel{};
+    Vec2d alongPixel{};
+    const bool projected =
+        camera.WorldToScreen(gizmoOrigin, originPixel) &&
+        camera.WorldToScreen(Vec3d{gizmoOrigin.x + 10.0, gizmoOrigin.y, gizmoOrigin.z},
+                             alongPixel);
+    ok &= Check(projected, "the gizmo origin and its X axis project to the screen");
+
+    if (projected) {
+        double dx = alongPixel.x - originPixel.x;
+        double dy = alongPixel.y - originPixel.y;
+        const double length = std::sqrt(dx * dx + dy * dy);
+        dx /= length;
+        dy /= length;
+
+        const auto atPixel = [&](double pixels, MouseAction action) {
+            MouseEvent e{};
+            e.button = MouseButton::Left;
+            e.action = action;
+            e.x = originPixel.x + dx * pixels;
+            e.y = originPixel.y + dy * pixels;
+            return viewport.OnMouseEvent(e);
+        };
+
+        ok &= Check(CgSucceeded(tools.Activate(ToolId::Move)), "activated the move tool");
+        // 沿轴 30 像素稳稳落在手柄上；90 像素是拖到的位置。
+        ok &= Check(atPixel(30.0, MouseAction::Down), "grabbed the X translate handle");
+        atPixel(90.0, MouseAction::Move);
+        atPixel(90.0, MouseAction::Up);
+
+        Transform afterDrag{};
+        scene.GetEntity(picked)->GetLocalTransform(afterDrag);
+        ok &= Check(afterDrag.translation.x > beforeDrag.translation.x + 1e-6,
+                    "dragging the X handle moved the object along X only");
+        ok &= Check(std::abs(afterDrag.translation.y - beforeDrag.translation.y) < 1e-9 &&
+                        std::abs(afterDrag.translation.z - beforeDrag.translation.z) < 1e-9,
+                    "and left the other two axes alone");
+
+        // 一次拖拽是一步撤销，而不是每个鼠标移动一步（§6.5）。
+        ICommandStack& stack = *scene.GetCommandStack();
+        ok &= Check(std::string(stack.PeekUndoName()) == "Move", "the drag pushed one Move");
+        ok &= Check(CgSucceeded(stack.Undo()), "and it undoes");
+        Transform undone{};
+        scene.GetEntity(picked)->GetLocalTransform(undone);
+        ok &= Check(std::abs(undone.translation.x - beforeDrag.translation.x) < 1e-9,
+                    "undo put the object back where it was");
+        stack.Redo();
+    }
+
+    // 结束时停在「Move 工具 + 一个非空选择集」上，截图里因此带着 M3 的验收内容：
+    // 高亮的对象，和落在它身上的 Gizmo。
     return ok;
 }
 
@@ -459,7 +595,7 @@ bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
     desc.surface.kind = options.headless ? SurfaceKind::Headless : SurfaceKind::Glfw;
     desc.surface.width = options.width;
     desc.surface.height = options.height;
-    desc.surface.title = "CadGeom — M2";
+    desc.surface.title = "CadGeom — M3";
     desc.projection =
         options.perspective ? ProjectionMode::Perspective : ProjectionMode::Orthographic;
     // Linear light: the renderer composes in a float target and the swapchain

@@ -13,7 +13,7 @@ void Narrow(const Vec3d& in, float out[3]) {
 
 CgResult GpuScene::Sync(vk::Context& ctx, vk::DeleteQueue& deleteQueue, uint64_t frame,
                         const SceneSnapshot& snapshot) {
-    if (everUploaded_ && snapshot.revision == uploadedRevision_) {
+    if (everUploaded_ && snapshot.geometryRevision == uploadedRevision_) {
         return CgResult::Ok;
     }
 
@@ -135,7 +135,7 @@ CgResult GpuScene::Sync(vk::Context& ctx, vk::DeleteQueue& deleteQueue, uint64_t
         pointRanges_ = std::move(pointRanges);
     }
 
-    uploadedRevision_ = snapshot.revision;
+    uploadedRevision_ = snapshot.geometryRevision;
     everUploaded_ = true;
 
     CG_DEBUG("gpu scene: %zu mesh(es) %u triangles, %zu curve(s) %u segments", snapshot.meshes.size(),

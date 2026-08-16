@@ -308,17 +308,19 @@ TEST_CASE("selection", "[scene][selection]") {
     }
 }
 
-TEST_CASE("unbuilt subsystems report the milestone that brings them", "[scene][pending]") {
+TEST_CASE("an empty scene bounds and picks nothing", "[scene]") {
     cgtest::EngineFixture fixture;
     IScene& scene = fixture.Scene();
 
     Aabb bounds{};
     CHECK_FALSE(scene.GetBounds(bounds));  // Nothing in the scene to bound.
 
+    // Nothing under the ray is an ordinary answer, not a failure: it must not
+    // leave an error behind for the host to trip over.
     PickResult hit{};
     const Ray ray{Vec3d{0, 0, 10}, Vec3d{0, 0, -1}};
     CHECK_FALSE(scene.Raycast(ray, PickFilter_All, hit));
-    CHECK(fixture.Engine().GetLastError() == CgResult::NotImplemented);
+    CHECK(fixture.Engine().GetLastError() == CgResult::Ok);
 
     // A group is a legitimate entity with no geometry, so it bounds nothing.
     scene.CreateGroup("Empty", kInvalidEntity);

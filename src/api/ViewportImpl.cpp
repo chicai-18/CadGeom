@@ -1,5 +1,7 @@
 #include "api/ViewportImpl.h"
 
+#include <cadgeom/ICommandStack.h>
+
 #include "api/EngineImpl.h"
 #include "core/Error.h"
 #include "core/Log.h"
@@ -17,6 +19,10 @@ constexpr double kOrbitRadiansPerPixel = 0.25 * kDegToRad;
 /// How many pixels the smallest grid cell should cover before the grid steps up
 /// to the next decade. Below this the lines merge into a haze.
 constexpr double kMinPixelsPerGridCell = 18.0;
+
+/// 拾取容差，屏幕像素（docs/architecture.md §6.3）。它是「点得准」和「点得中」
+/// 之间的那条线：小了细线选不上，大了两条挨着的线分不开。
+constexpr double kPickPixels = 6.0;
 
 /// Snaps to a 1-2-5 sequence: the spacings a person reads off a drawing without
 /// having to think about it.
@@ -37,7 +43,7 @@ double NiceSpacing(double desired) {
 ViewportImpl::ViewportImpl(EngineImpl& engine, std::unique_ptr<render::Surface> surface)
     : engine_(engine),
       surface_(std::move(surface)),
-      toolContext_(engine.Scene(), *this, camera_, engine.Tools().Settings()),
+      toolContext_(engine.Scene(), *this, camera_, engine.Tools().Settings(), &engine.Scene()),
       overlayBuilder_(overlay_) {}
 
 ViewportImpl::~ViewportImpl() {
@@ -158,19 +164,51 @@ void ViewportImpl::GetWorkPlane(WorkPlane& out) const {
 }
 
 CgResult ViewportImpl::SetWorkPlaneFromPick(const PickResult& pick) {
-    (void)pick;
-    return core::SetError(CgResult::NotImplemented,
-                          "SetWorkPlaneFromPick needs face picking, which lands in milestone M3");
+    if (pick.kind == PickKind::None || !IsValid(pick.entity)) {
+        return core::SetError(CgResult::InvalidArgument,
+                              "SetWorkPlaneFromPick: the pick did not hit anything");
+    }
+    if (LengthSq(pick.normal) < kEpsilon) {
+        return core::SetError(CgResult::InvalidArgument,
+                              "SetWorkPlaneFromPick: the pick carries a zero-length normal");
+    }
+
+    // u 轴优先沿用当前平面的，这样在共面的两个面之间切换时，网格和矩形工具的
+    // 朝向不会莫名其妙地转过去。和法线平行时 MakeWorkPlane 自己会另选一个。
+    workPlane_ = MakeWorkPlane(pick.point, pick.normal, workPlane_.uAxis);
+    CG_DEBUG("work plane set from a %s pick on entity %llu",
+             pick.kind == PickKind::Face ? "face" : "curve",
+             static_cast<unsigned long long>(pick.entity.value));
+    return CgResult::Ok;
+}
+
+interact::PickTolerance ViewportImpl::PickToleranceFor(double pixels) const {
+    // 正交下一个像素处处一样大，透视下它随深度线性变大 —— 两者写成同一个
+    // `base + slope * t`，窄阶段就不必知道自己在哪种投影里。
+    Vec3d eye{};
+    Vec3d forward{};
+    camera_.GetPosition(eye);
+    camera_.GetForward(forward);
+    const double perUnitDepth = camera_.GetPixelWorldSize(eye + forward);
+
+    interact::PickTolerance tolerance{};
+    if (camera_.GetProjection() == ProjectionMode::Perspective) {
+        // t 是沿射线的距离，深度是它在视线方向上的投影，两者在视野边缘差一个
+        // 余弦。差出来的是稍微宽一点的容差，比漏选好。
+        tolerance.slope = pixels * perUnitDepth;
+    } else {
+        tolerance.base = pixels * perUnitDepth;
+    }
+    return tolerance;
 }
 
 bool ViewportImpl::Pick(double x, double y, uint32_t pickFilter, PickResult& out) const {
-    (void)x;
-    (void)y;
-    (void)pickFilter;
-    (void)out;
-    core::SetError(CgResult::NotImplemented,
-                   "Pick needs the BVH and the picker, which land in milestone M3");
-    return false;
+    Ray ray{};
+    camera_.ScreenToRay(x, y, ray);
+    // 光标下没有东西不是错误：鼠标划过空白是最常见的情况，把它记进错误槽会让
+    // 宿主每一帧都读到一条假故障。
+    return engine_.Scene().RaycastWithTolerance(ray, pickFilter, PickToleranceFor(kPickPixels),
+                                                out);
 }
 
 void ViewportImpl::SetPickFilter(uint32_t filter) {
@@ -308,16 +346,37 @@ bool ViewportImpl::OnKeyEvent(const KeyEvent& e) {
             return true;
         }
     }
-    return HandleToolKey(e) || HandleCameraKey(e);
+    return HandleEditKey(e) || HandleToolKey(e) || HandleCameraKey(e);
 }
 
-bool ViewportImpl::HandleToolKey(const KeyEvent& e) {
-    if (e.action == KeyAction::Up) {
+bool ViewportImpl::HandleEditKey(const KeyEvent& e) {
+    if (e.action == KeyAction::Up || (e.mods & KeyMod_Ctrl) == 0) {
         return false;
     }
 
-    // Escape always gets back to Select, even when the active tool declined it —
-    // it is the one binding a user reaches for when they are lost.
+    ICommandStack* stack = engine_.Scene().GetCommandStack();
+    switch (e.key) {
+        case 'Z':
+            // Ctrl+Shift+Z 也是重做：两派习惯都有人用，而它们不冲突。
+            if ((e.mods & KeyMod_Shift) != 0) {
+                return CgSucceeded(stack->Redo());
+            }
+            return CgSucceeded(stack->Undo());
+        case 'Y':
+            return CgSucceeded(stack->Redo());
+        default:
+            return false;
+    }
+}
+
+bool ViewportImpl::HandleToolKey(const KeyEvent& e) {
+    // 带 Ctrl 的按键归编辑快捷键，别让 Ctrl+C 切到画圆工具去。
+    if (e.action == KeyAction::Up || (e.mods & KeyMod_Ctrl) != 0) {
+        return false;
+    }
+
+    // Escape 永远能回到 Select，哪怕当前工具刚刚拒绝了它 —— 用户迷路时按的就是
+    // 这个键。
     if (e.key == Key_Escape) {
         engine_.Tools().Cancel();
         return true;
@@ -331,6 +390,8 @@ bool ViewportImpl::HandleToolKey(const KeyEvent& e) {
         case 'C': id = ToolId::Circle;    break;
         case 'R': id = ToolId::Rectangle; break;
         case 'Y': id = ToolId::Polyline;  break;
+        case 'M': id = ToolId::Move;      break;
+        case 'T': id = ToolId::Rotate;    break;  // R 已经给了矩形，T 取 turn。
         default: return false;
     }
 

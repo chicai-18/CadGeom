@@ -422,6 +422,26 @@ inline void Expand(Aabb& b, const Aabb& other) {
 inline Vec3d Center(const Aabb& b) { return (b.min + b.max) * 0.5; }
 inline Vec3d Extents(const Aabb& b) { return b.max - b.min; }
 
+/// @brief 各方向外扩 `amount` 的副本。空盒子原样返回 —— 无穷大加一个有限值还是
+///        无穷大，外扩一个空盒子只会得到一个仍然为空、但看起来不像的东西。
+inline Aabb Padded(const Aabb& b, double amount) {
+    if (IsEmpty(b) || !(amount > 0.0)) {
+        return b;
+    }
+    const Vec3d pad{amount, amount, amount};
+    return Aabb{b.min - pad, b.max + pad};
+}
+
+/// @brief 盒内离 `p` 最近的点；`p` 在盒内时就是它自己。点到盒的距离由此而来。
+inline Vec3d ClosestPointIn(const Aabb& b, const Vec3d& p) {
+    if (IsEmpty(b)) {
+        return p;
+    }
+    return Vec3d{p.x < b.min.x ? b.min.x : (p.x > b.max.x ? b.max.x : p.x),
+                 p.y < b.min.y ? b.min.y : (p.y > b.max.y ? b.max.y : p.y),
+                 p.z < b.min.z ? b.min.z : (p.z > b.max.z ? b.max.z : p.z)};
+}
+
 inline double DiagonalLength(const Aabb& b) {
     return IsEmpty(b) ? 0.0 : Length(Extents(b));
 }

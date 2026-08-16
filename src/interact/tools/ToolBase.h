@@ -71,6 +71,16 @@ protected:
     /// pointing at the work plane at all.
     static bool CursorPoint(const MouseEvent& e, IToolContext* ctx, Vec3d& out);
 
+    /// @brief 按一次点击更新选择集：光标下有东西就选它，Ctrl/Shift 是加选/反选，
+    ///        点在空白处则清空。
+    /// @return 命中并选中了某个对象时为 true。
+    /// @note Select 和两个变换工具共用 —— 在 Move 里点一下换个对象是理所当然的，
+    ///       为此让用户切回 Select 再切回来不是。
+    static bool PickAndSelect(const MouseEvent& e, IToolContext* ctx);
+
+    /// @brief 按光标位置更新预高亮。@return 光标下有对象时为 true。
+    static bool UpdateHover(const MouseEvent& e, IToolContext* ctx);
+
     static bool IsLeft(const MouseEvent& e) { return e.button == MouseButton::Left; }
 
     static bool BeyondClickSlop(double x0, double y0, double x1, double y1);

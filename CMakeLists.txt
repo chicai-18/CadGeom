@@ -122,15 +122,22 @@ set(CADGEOM_SOURCES
     src/core/ObjectTracker.cpp
     src/core/Png.cpp
     src/geom/Curve.cpp
+    src/geom/Intersect.cpp
     src/geom/Kernel.cpp
     src/geom/MeshData.cpp
+    src/geom/Snap.cpp
     src/geom/Tessellate.cpp
+    src/scene/Bvh.cpp
+    src/interact/Gizmo.cpp
     src/interact/OrbitCamera.cpp
     src/interact/OverlayBuilder.cpp
+    src/interact/Picker.cpp
+    src/interact/Snap.cpp
     src/interact/ToolContext.cpp
     src/interact/WorkPlane.cpp
     src/interact/tools/DrawTools.cpp
     src/interact/tools/ToolBase.cpp
+    src/interact/tools/TransformTools.cpp
     src/api/Commands.cpp
     src/api/CommandStackImpl.cpp
     src/api/EngineImpl.cpp

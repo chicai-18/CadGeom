@@ -7,8 +7,8 @@ break by accident.
 
 ## Current state
 
-Milestone **M2 complete** (geometry kernel, lines and tools). See
-`docs/architecture.md` §9 for the plan.
+Milestone **M3 complete** (BVH, picking, selection highlight, gizmos, snapping).
+See `docs/architecture.md` §9 for the plan.
 
 | | Status |
 |---|---|
@@ -19,10 +19,11 @@ Milestone **M2 complete** (geometry kernel, lines and tools). See
 | `ISurface`: GLFW, native Win32, headless | Working (X11/Wayland/Cocoa report `NotSupported`) |
 | `SimpleKernel`: point/line/circle/arc/rectangle/polyline, tessellation, bounds | Working |
 | WorkPlane, `IToolContext`, Select/Point/Line/Circle/Rectangle/Polyline tools | Working |
-| BVH, picking, gizmos, snapping to geometry | **M3** — `Pick`, `Raycast`, `SetWorkPlaneFromPick` return `NotImplemented`; only `Snap_Grid` works |
+| BVH, `Raycast`/`Pick`/`SetWorkPlaneFromPick`, selection highlight, Move/Rotate gizmos | Working |
+| Snapping | Working except `Snap_Perpendicular` — see below |
 | Extrude, topology, `EdgePass` | **M4** — `Extrude` returns `NotImplemented` |
 | OBJ / glTF handlers | **M5** |
-| MSAA, ImGui panels, overlay text | **M6** — `ViewportDesc::sampleCount` is ignored with a warning |
+| MSAA, ImGui panels, overlay text, Scale/Measure tools | **M6** — `ViewportDesc::sampleCount` is ignored with a warning |
 
 Anything not built yet fails with `CgResult::NotImplemented` and an error
 message naming the milestone. Keep that habit: a host wiring itself up against
@@ -60,11 +61,16 @@ these hold (`docs/architecture.md` §2.2):
 `Types.h` is under the same freeze: hosts compile those layouts into their own
 code. Adding a field to an existing struct is a breaking change.
 
-One consequence already bites: `ShapeParams` is a POD union with nowhere to put
-a polyline's variable-length point list. `GetParams` on a polyline therefore
-returns its `type` and an unused union, and `SetParams` returns `NotSupported`.
-The kernel's own `geom::ShapeDef` carries the points; that is the internal type
-and it is free to hold STL.
+Two consequences already bite:
+
+- `ShapeParams` is a POD union with nowhere to put a polyline's variable-length
+  point list. `GetParams` on a polyline therefore returns its `type` and an
+  unused union, and `SetParams` returns `NotSupported`. The kernel's own
+  `geom::ShapeDef` carries the points; that is the internal type and it is free
+  to hold STL.
+- `IToolContext::SnapAt` takes a pixel and nothing else, so there is nowhere to
+  pass the reference point a perpendicular snap is measured *from*. Every other
+  `SnapType` works; `Snap_Perpendicular` waits for an extension interface in M6.
 
 ## Layering
 
@@ -88,8 +94,18 @@ down, not a violation of it.
 The built-in tools reach the scene through the **public** interfaces
 (`IScene`, `IGeometryBuilder`, `ISelection`), never through `api/*Impl`. That is
 what keeps `interact/ → api/` from becoming a cycle, and it means a tool can only
-do what a host-written tool could do. Whatever a tool needs that `IToolContext`
-does not carry goes in `interact::ToolSettings`, which the tool manager owns.
+do what a host-written tool could do — the gizmo's undo step is an `ICommand`
+written against `IEntity::SetLocalTransform`, exactly what a host would write.
+Whatever a tool needs that `IToolContext` does not carry goes in
+`interact::ToolSettings`, which the tool manager owns.
+
+Picking and snapping invert the same arrow. The entity table and the kernel live
+in `api/`, above `interact/`, so `interact/` declares what it needs
+(`IPickTargetSource`, `ISnapSource`) and `SceneImpl` implements them and hands
+the data down. `scene::Bvh` indexes nothing but an `EntityId` and a world AABB,
+which is why it can sit that low. `IScene` must stay `SceneImpl`'s **first** base:
+the host's `IScene*` points at the primary subobject, and moving it would change
+what that pointer means.
 
 ## Conventions
 
@@ -180,9 +196,10 @@ build/bin/Debug/glfw_viewer.exe --perspective --frames 300
 Targets: `cadgeom` (the only shipped artifact), `cadgeom_tests`, `glfw_viewer`.
 
 In the window, `V X L C R Y` pick the Select/Point/Line/Circle/Rectangle/
-Polyline tools and Esc cancels. Those bindings live in `ViewportImpl` rather than
-in the demo because with `SurfaceKind::Glfw` the *engine* owns the window, so the
-host never sees the key.
+Polyline tools, `M` and `T` pick Move and Rotate (`R` was taken; `T` for turn),
+Esc cancels, and Ctrl+Z / Ctrl+Y undo and redo. Those bindings live in
+`ViewportImpl` rather than in the demo because with `SurfaceKind::Glfw` the
+*engine* owns the window, so the host never sees the key.
 
 The Vulkan SDK is the one dependency not vendored. Without it — or without
 `glslc`, since the shaders are compiled into the DLL — the build drops the

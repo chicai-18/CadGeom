@@ -46,8 +46,12 @@ public:
 
     virtual void SetWorkPlane(const WorkPlane& plane) = 0;
     virtual void GetWorkPlane(WorkPlane& out) const = 0;
-    /// Adopts a picked face as the work plane — the move that makes
-    /// "click a face, draw on it, extrude" work.
+    /// @brief 把拾取到的面设为工作平面 —— 「点一个面、在上面画、再拉伸」这条路
+    ///        就是从这里开始的。
+    /// @param pick 命中结果；新平面过 `pick.point`，法线取 `pick.normal`。
+    /// @return kind 为 PickKind::None、或法线是零向量时返回 InvalidArgument。
+    /// @note 圆、圆弧和矩形会把自己的承载平面作为法线报出来，所以在 M4 的实体做
+    ///       出来之前，对着一条平面曲线调用它就已经有意义了。
     virtual CgResult SetWorkPlaneFromPick(const PickResult& pick) = 0;
 
     // -- Input --------------------------------------------------------------
@@ -61,7 +65,11 @@ public:
     virtual void SetPickFilter(uint32_t filter) = 0;
     virtual uint32_t GetPickFilter() const = 0;
 
-    /// One-off pick at a pixel, independent of the active tool.
+    /// @brief 在某个像素上做一次拾取，与当前工具无关。
+    /// @param x,y 视口像素坐标，左上原点、y 向下。
+    /// @return 没命中为 false。**这不是错误**，不会写进 GetLastError() —— 宿主
+    ///         可以每帧调用它来做悬停高亮，不必担心刷出一串假故障。
+    /// @note 容差是屏幕空间的（约 6 像素），所以正交和透视下手感一致。
     virtual bool Pick(double x, double y, uint32_t pickFilter, PickResult& out) const = 0;
 
     // -- Frame --------------------------------------------------------------
