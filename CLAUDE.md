@@ -133,6 +133,33 @@ does not carry goes in `interact::ToolSettings`, which the tool manager owns.
   must return to its baseline after teardown. The tests and the demo both assert
   this — keep it that way when adding a new impl class.
 
+### Comments — Chinese, in Doxygen form
+
+Comments are written in **Chinese**, formatted for **Doxygen**. `///` above the
+declaration; `@brief` for the one-line summary, then `@param` / `@return` /
+`@note` / `@warning` as the thing being documented needs them. `/** … */` is for
+file headers only (`@file`, `@brief`). Comments inside a function body are plain
+`//` — still Chinese, still explaining *why* rather than restating the line.
+
+Identifiers are not translated. Type names, function names, enum values
+(`CgResult::InvalidArgument`), milestone tags (`M3`) and Vulkan/GLSL terms stay
+in English and stay spelled exactly as the code spells them, so Doxygen can link
+them and so a grep for a symbol still finds its documentation.
+
+```cpp
+/// @brief 在给定平面上创建一个圆，圆心即平面原点。
+/// @param plane  所在平面；其法线决定圆的朝向，原点即圆心。
+/// @param radius 半径（世界单位），必须 > 0。
+/// @return 新实体的 id；失败时返回 kInvalidEntity，原因见
+///         IEngine::GetLastErrorMessage()。
+/// @note 可撤销 —— 内部压入 ICommand，调用方无需自行入栈。
+virtual EntityId MakeCircle(const Plane& plane, double radius) = 0;
+```
+
+The existing headers still carry English `///` comments from M0–M2. Translate
+the ones you are already editing; don't open a file just to translate it, and
+don't mix languages inside a single comment block.
+
 ## Build
 
 ```sh
