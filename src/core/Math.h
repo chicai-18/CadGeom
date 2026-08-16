@@ -155,6 +155,136 @@ inline Vec3d TransformDirection(const Mat4d& m, const Vec3d& v) {
                  m.m[2] * v.x + m.m[6] * v.y + m.m[10] * v.z};
 }
 
+/// Full 4x4 transform keeping w — the form WorldToScreen needs to tell a point
+/// behind the eye from one in front of it.
+inline Vec4d TransformVec4(const Mat4d& m, const Vec4d& v) {
+    return Vec4d{m.m[0] * v.x + m.m[4] * v.y + m.m[8] * v.z + m.m[12] * v.w,
+                 m.m[1] * v.x + m.m[5] * v.y + m.m[9] * v.z + m.m[13] * v.w,
+                 m.m[2] * v.x + m.m[6] * v.y + m.m[10] * v.z + m.m[14] * v.w,
+                 m.m[3] * v.x + m.m[7] * v.y + m.m[11] * v.z + m.m[15] * v.w};
+}
+
+inline Mat4d Transpose(const Mat4d& m) {
+    Mat4d r{};
+    for (int c = 0; c < 4; ++c) {
+        for (int row = 0; row < 4; ++row) {
+            r.m[row * 4 + c] = m.m[c * 4 + row];
+        }
+    }
+    return r;
+}
+
+/// Cofactor-expansion inverse. False (and `out` untouched) when the matrix is
+/// singular, which for a view or projection matrix means the caller built a
+/// degenerate camera and should be told rather than handed NaNs.
+inline bool Invert(const Mat4d& in, Mat4d& out) {
+    const double* m = in.m;
+    double inv[16];
+
+    inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15] +
+             m[9] * m[7] * m[14] + m[13] * m[6] * m[11] - m[13] * m[7] * m[10];
+    inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15] -
+             m[8] * m[7] * m[14] - m[12] * m[6] * m[11] + m[12] * m[7] * m[10];
+    inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15] +
+             m[8] * m[7] * m[13] + m[12] * m[5] * m[11] - m[12] * m[7] * m[9];
+    inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14] -
+              m[8] * m[6] * m[13] - m[12] * m[5] * m[10] + m[12] * m[6] * m[9];
+    inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15] -
+             m[9] * m[3] * m[14] - m[13] * m[2] * m[11] + m[13] * m[3] * m[10];
+    inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15] +
+             m[8] * m[3] * m[14] + m[12] * m[2] * m[11] - m[12] * m[3] * m[10];
+    inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15] -
+             m[8] * m[3] * m[13] - m[12] * m[1] * m[11] + m[12] * m[3] * m[9];
+    inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14] +
+              m[8] * m[2] * m[13] + m[12] * m[1] * m[10] - m[12] * m[2] * m[9];
+    inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15] +
+             m[5] * m[3] * m[14] + m[13] * m[2] * m[7] - m[13] * m[3] * m[6];
+    inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15] -
+             m[4] * m[3] * m[14] - m[12] * m[2] * m[7] + m[12] * m[3] * m[6];
+    inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15] +
+              m[4] * m[3] * m[13] + m[12] * m[1] * m[7] - m[12] * m[3] * m[5];
+    inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14] -
+              m[4] * m[2] * m[13] - m[12] * m[1] * m[6] + m[12] * m[2] * m[5];
+    inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11] -
+             m[5] * m[3] * m[10] - m[9] * m[2] * m[7] + m[9] * m[3] * m[6];
+    inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11] +
+             m[4] * m[3] * m[10] + m[8] * m[2] * m[7] - m[8] * m[3] * m[6];
+    inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11] -
+              m[4] * m[3] * m[9] - m[8] * m[1] * m[7] + m[8] * m[3] * m[5];
+    inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10] +
+              m[4] * m[2] * m[9] + m[8] * m[1] * m[6] - m[8] * m[2] * m[5];
+
+    const double det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
+    if (std::fabs(det) < 1e-300) {
+        return false;
+    }
+    const double invDet = 1.0 / det;
+    for (int i = 0; i < 16; ++i) {
+        out.m[i] = inv[i] * invDet;
+    }
+    return true;
+}
+
+/// Convenience form; returns identity for a singular matrix.
+inline Mat4d Inverse(const Mat4d& m) {
+    Mat4d r = Mat4Identity();
+    Invert(m, r);
+    return r;
+}
+
+// ---------------------------------------------------------------------------
+// View and projection
+//
+// Clip space is Vulkan's: x,y in [-1,1] with **+y down**, z in [0,1]. The y
+// flip is baked into the projection rather than applied with a negative
+// viewport height, so the matrices these return are the ones that were actually
+// used to draw — which is what makes ScreenToRay and WorldToScreen agree with
+// what the user sees.
+//
+// View space is right-handed with the camera looking down -Z, the usual
+// convention; only the projection knows about Vulkan.
+// ---------------------------------------------------------------------------
+
+inline Mat4d Mat4LookAt(const Vec3d& eye, const Vec3d& target, const Vec3d& up) {
+    const Vec3d f = Normalized(target - eye);        // forward, into the screen
+    Vec3d s = Normalized(Cross(f, up));              // right
+    if (LengthSq(s) < kEpsilon) {                    // up parallel to forward
+        s = Perpendicular(f);
+    }
+    const Vec3d u = Cross(s, f);                     // true up
+
+    Mat4d r = Mat4Identity();
+    r.m[0] = s.x;  r.m[4] = s.y;  r.m[8] = s.z;   r.m[12] = -Dot(s, eye);
+    r.m[1] = u.x;  r.m[5] = u.y;  r.m[9] = u.z;   r.m[13] = -Dot(u, eye);
+    r.m[2] = -f.x; r.m[6] = -f.y; r.m[10] = -f.z; r.m[14] = Dot(f, eye);
+    return r;
+}
+
+inline Mat4d Mat4Ortho(double left, double right, double bottom, double top, double nearPlane,
+                       double farPlane) {
+    Mat4d r{};
+    r.m[0] = 2.0 / (right - left);
+    r.m[5] = -2.0 / (top - bottom);  // negative: Vulkan's +y points down
+    r.m[10] = -1.0 / (farPlane - nearPlane);
+    r.m[12] = -(right + left) / (right - left);
+    r.m[13] = (top + bottom) / (top - bottom);
+    r.m[14] = -nearPlane / (farPlane - nearPlane);
+    r.m[15] = 1.0;
+    return r;
+}
+
+inline Mat4d Mat4Perspective(double fovYRadians, double aspect, double nearPlane,
+                            double farPlane) {
+    const double f = 1.0 / std::tan(0.5 * fovYRadians);
+    Mat4d r{};
+    r.m[0] = f / aspect;
+    r.m[5] = -f;  // negative: Vulkan's +y points down
+    r.m[10] = farPlane / (nearPlane - farPlane);
+    r.m[11] = -1.0;
+    r.m[14] = (farPlane * nearPlane) / (nearPlane - farPlane);
+    return r;
+}
+
 inline Mat4d ToMatrix(const Transform& t) {
     const Quatd q = Normalized(t.rotation);
     const double xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;

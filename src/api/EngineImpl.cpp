@@ -5,7 +5,14 @@
 #include "core/Error.h"
 #include "core/Log.h"
 
+#if CADGEOM_HAS_VULKAN
+#include "api/ViewportImpl.h"
+#include "render/Surface.h"
+#endif
+
+#include <algorithm>
 #include <atomic>
+#include <memory>
 
 namespace cadgeom::api {
 namespace {
@@ -35,10 +42,17 @@ EngineImpl::EngineImpl(const EngineDesc& desc)
 EngineImpl::~EngineImpl() {
     // Viewports the host never released. Documented behaviour: the engine owns
     // them in the end, so shutting down without tidying up is not a leak.
-    for (IViewport* vp : viewports_) {
-        vp->Release();
+    // Swapped out first because destroying one otherwise mutates the vector
+    // being walked.
+    std::vector<IViewport*> owned;
+    owned.swap(viewports_);
+#if CADGEOM_HAS_VULKAN
+    for (IViewport* viewport : owned) {
+        delete static_cast<ViewportImpl*>(viewport);
     }
-    viewports_.clear();
+    // renderSystem_ is a member, so it goes down after this body has run —
+    // which is the right order: every viewport is already gone.
+#endif
 
     CG_INFO("engine destroyed after %llu frames", static_cast<unsigned long long>(frameIndex_));
 
@@ -62,14 +76,58 @@ const IScene* EngineImpl::GetScene() const {
 }
 
 IViewport* EngineImpl::CreateViewport(const ViewportDesc& desc) {
+#if CADGEOM_HAS_VULKAN
+    std::unique_ptr<render::Surface> surface = render::CreateSurface(desc.surface);
+    if (!surface) {
+        return nullptr;  // CreateSurface has already recorded why.
+    }
+    const bool needsPresentation = surface->PresentsToScreen();
+
+    if (!renderSystem_.IsValid()) {
+        // Presentation support is asked for even when this first viewport is
+        // headless, so a later windowed one is not left without a swapchain.
+        // A machine that cannot present at all still gets a headless device.
+        CgResult r = renderSystem_.Initialize(appName_.c_str(), validation_, true);
+        if (CgFailed(r) && !needsPresentation) {
+            CG_WARN("no presentation-capable device; falling back to headless rendering");
+            r = renderSystem_.Initialize(appName_.c_str(), validation_, false);
+        }
+        if (CgFailed(r)) {
+            return nullptr;
+        }
+    }
+
+    auto viewport = std::make_unique<ViewportImpl>(*this, std::move(surface));
+    if (CgFailed(viewport->Initialize(desc))) {
+        return nullptr;
+    }
+
+    viewports_.push_back(viewport.get());
+    CG_INFO("viewport created on %s", renderSystem_.Context().DeviceName());
+    return viewport.release();
+#else
     (void)desc;
-    // A viewport is a Vulkan swapchain plus a renderer; both arrive in M1.
-    // Failing loudly here beats handing back a half-alive object that renders
-    // nothing and cannot say why.
     core::SetError(CgResult::NotImplemented,
-                   "CreateViewport needs the Vulkan renderer, which lands in milestone M1 "
-                   "(install the Vulkan SDK >= 1.3.275 before starting it)");
+                   "this build has no renderer: it was configured without the Vulkan SDK. "
+                   "Install LunarG >= 1.3.275, set VULKAN_SDK and reconfigure.");
     return nullptr;
+#endif
+}
+
+void EngineImpl::ReleaseViewport(IViewport* viewport) {
+    const auto it = std::find(viewports_.begin(), viewports_.end(), viewport);
+    if (it == viewports_.end()) {
+        CG_WARN("IViewport::Release() on a viewport this engine does not own");
+        return;
+    }
+    viewports_.erase(it);
+
+#if CADGEOM_HAS_VULKAN
+    delete static_cast<ViewportImpl*>(viewport);
+    // The device stays up even with no viewports left: a host that closes one
+    // window and opens another should not pay for a full device rebuild, and
+    // the memory involved is trivial next to the geometry it holds.
+#endif
 }
 
 uint32_t EngineImpl::GetViewportCount() const {
@@ -100,10 +158,63 @@ void EngineImpl::Tick(double deltaSeconds) {
     elapsedSeconds_ += deltaSeconds;
     ++frameIndex_;
 
-    // M1 adds transform flush + re-tessellation + GpuScene::Sync here. The
-    // ordering is the contract: everything dirty is resolved before any
-    // viewport renders.
+#if CADGEOM_HAS_VULKAN
+    // Windows the engine owns need their queue drained; windows the host owns
+    // are its own business and this is a no-op for them.
+    render::PumpWindowEvents();
+
+    if (renderSystem_.IsValid()) {
+        // The ordering is the contract: retire what the GPU has finished with,
+        // then resolve everything dirty, and only then let viewports render.
+        renderSystem_.BeginFrame(frameIndex_);
+        SyncRenderState();
+    }
+#endif
 }
+
+#if CADGEOM_HAS_VULKAN
+
+void EngineImpl::UpdateSnapshot() {
+    const uint64_t revision = scene_.GetRevision();
+    if (snapshotValid_ && revision == snapshotRevision_) {
+        return;
+    }
+
+    snapshot_.meshes.clear();
+    snapshot_.items.clear();
+
+    // M2 walks the scene here, collecting each visible entity's tessellated
+    // mesh and world transform. Until the kernel exists there is nothing in the
+    // scene that carries geometry, so the placeholder below is what MeshPass
+    // draws — and it stops being used the moment a real mesh turns up.
+    if (snapshot_.items.empty()) {
+        if (placeholderMesh_.IsEmpty()) {
+            placeholderMesh_ = geom::MakeBox(Vec3d{0.0, 0.0, 5.0}, Vec3d{10.0, 10.0, 10.0});
+        }
+        render::DrawItem item{};
+        item.meshIndex = 0;
+        item.worldTransform = Mat4Identity();
+        item.color = Color{0.62f, 0.65f, 0.70f, 1.0f};
+
+        snapshot_.meshes.push_back(&placeholderMesh_);
+        snapshot_.items.push_back(item);
+    }
+
+    snapshot_.revision = revision;
+    snapshotRevision_ = revision;
+    snapshotValid_ = true;
+}
+
+CgResult EngineImpl::SyncRenderState() {
+    if (!renderSystem_.IsValid()) {
+        return CgResult::Ok;
+    }
+    UpdateSnapshot();
+    return renderSystem_.Geometry().Sync(renderSystem_.Context(), renderSystem_.Deletions(),
+                                         frameIndex_, snapshot_);
+}
+
+#endif // CADGEOM_HAS_VULKAN
 
 CgResult EngineImpl::GetLastError() const {
     return core::LastError();
@@ -126,7 +237,14 @@ LogLevel EngineImpl::GetLogLevel() const {
 }
 
 const char* EngineImpl::GetDeviceName() const {
-    return "<no Vulkan device: renderer lands in M1>";
+#if CADGEOM_HAS_VULKAN
+    if (renderSystem_.IsValid()) {
+        return renderSystem_.Context().DeviceName();
+    }
+    return "<no device yet: created with the first viewport>";
+#else
+    return "<no Vulkan device: this build has no renderer>";
+#endif
 }
 
 void* EngineImpl::GetExtension(uint32_t interfaceId) {

@@ -459,8 +459,8 @@ install/
 
 | 阶段 | 交付 | 验收 |
 |---|---|---|
-| **M0 骨架** | CMake 工程、submodules、导出宏、`ICadEngine` 空实现、`cadgeom.dll` + demo 链接通过 | demo 能 create/release engine，无泄漏 |
-| **M1 Vulkan 起飞** | Context/Swapchain/RHI/Renderer、`GridPass`+`MeshPass`、OrbitCamera、ISurface 双后端 | 窗口里出现可旋转的网格地面 + 一个立方体 |
+| **M0 骨架** ✅ | CMake 工程、submodules、导出宏、`ICadEngine` 空实现、`cadgeom.dll` + demo 链接通过 | demo 能 create/release engine，无泄漏 |
+| **M1 Vulkan 起飞** ✅ | Context/Swapchain/RHI/Renderer、`GridPass`+`MeshPass`、OrbitCamera、ISurface 三后端（Glfw / Win32 / Headless） | 窗口里出现可旋转的网格地面 + 一个立方体 |
 | **M2 几何与线条** | 内核 + 点/线/圆/矩形、`LinePass`(屏幕空间)、`PointPass`、Tool 状态机、WorkPlane | 鼠标能交互画出点/线/圆/矩形，线宽正确、虚线可用 |
 | **M3 选择与操作** | BVH、Picker（点/边/面优先级）、Selection 高亮、Gizmo、CommandStack | 能选中、拖动、旋转，Ctrl+Z/Y 正常 |
 | **M4 拉伸成体** | Profile 三角化、Extrude + Topology、`EdgePass`、`ExtrudeTool` | 圆→圆柱、矩形→立方体，交互式拖拽高度，带轮廓黑边 |
@@ -473,7 +473,7 @@ install/
 
 | 风险 | 影响 | 对策 |
 |---|---|---|
-| **Vulkan SDK 未安装**（当前环境确认缺失） | M1 直接阻塞 | 开工前装 LunarG Vulkan SDK ≥ 1.3.275，确认 `VULKAN_SDK` 与 `glslc` 可用 |
+| ~~**Vulkan SDK 未安装**~~（已解决：1.4.357 已装，M1 在 RTX 3070 Ti 上跑通） | M1 直接阻塞 | 开工前装 LunarG Vulkan SDK ≥ 1.3.275，确认 `VULKAN_SDK` 与 `glslc` 可用 |
 | C++ 纯虚接口的 ABI 脆弱性 | 宿主换编译器 → 诡异崩溃 | §2.2 七条纪律写进 CLAUDE.md；`CadGeom_GetApiVersion()` 启动校验；文档标注支持的编译器矩阵 |
 | Vulkan 样板代码量大，容易淹没进度 | M1 拖长 | 严守 vk RHI 分层，先「能跑」再「优雅」；dynamic rendering + VMA 已砍掉大半样板 |
 | 任意多边形三角化 | M4 只能支持凸轮廓 | v1 凸多边形扇形剖分先跑通；v1.1 引入 earcut（单头文件，MIT） |

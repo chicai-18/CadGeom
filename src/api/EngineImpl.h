@@ -7,6 +7,12 @@
 #include "api/ToolManagerImpl.h"
 #include "core/ObjectTracker.h"
 
+#if CADGEOM_HAS_VULKAN
+#include "geom/MeshData.h"
+#include "render/GpuScene.h"
+#include "render/RenderSystem.h"
+#endif
+
 #include <string>
 #include <vector>
 
@@ -49,7 +55,26 @@ public:
     bool ValidationEnabled() const { return validation_; }
     uint64_t FrameIndex() const { return frameIndex_; }
 
+    /// Destroys one viewport. IViewport::Release() routes here because the
+    /// engine owns viewports even after the host has let go of them.
+    void ReleaseViewport(IViewport* viewport);
+
+#if CADGEOM_HAS_VULKAN
+    render::RenderSystem& Renderer() { return renderSystem_; }
+
+    /// Brings the GPU's copy of the scene up to date. Idempotent and cheap
+    /// when nothing has changed, so a viewport can call it before every frame
+    /// and a host that forgets to Tick() still gets a correct picture.
+    CgResult SyncRenderState();
+
+    const render::SceneSnapshot& Snapshot() const { return snapshot_; }
+#endif
+
 private:
+#if CADGEOM_HAS_VULKAN
+    void UpdateSnapshot();
+#endif
+
     core::ObjectTracker tracker_;
 
     std::string appName_;
@@ -64,6 +89,20 @@ private:
 
     uint64_t frameIndex_{0};
     double elapsedSeconds_{0.0};
+
+#if CADGEOM_HAS_VULKAN
+    /// Created on the first CreateViewport(): a host that only edits geometry
+    /// never initialises a GPU.
+    render::RenderSystem renderSystem_;
+    render::SceneSnapshot snapshot_;
+    uint64_t snapshotRevision_{0};
+    bool snapshotValid_{false};
+
+    /// M1 has a renderer but no kernel, so there is nothing in the scene to
+    /// draw yet. This stands in until M2 fills the scene with real tessellated
+    /// geometry, and disappears on its own the moment anything real shows up.
+    geom::MeshData placeholderMesh_;
+#endif
 };
 
 } // namespace cadgeom::api

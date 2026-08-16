@@ -132,11 +132,18 @@ TEST_CASE("failures report through the error channel, never by throwing", "[abi]
     engine.ClearLastError();
     CHECK(engine.GetLastError() == CgResult::Ok);
 
+    // A native surface with no window handle. Deliberately not a Glfw or
+    // headless surface: those now succeed, and standing up a Vulkan device is
+    // exactly what this suite must never do (docs/architecture.md §1).
     ViewportDesc desc{};
+    desc.surface.kind = SurfaceKind::NativeWin32;
+    desc.surface.nativeWindow = nullptr;
+
     CHECK(engine.CreateViewport(desc) == nullptr);
-    CHECK(engine.GetLastError() == CgResult::NotImplemented);
+    CHECK(CgFailed(engine.GetLastError()));
     REQUIRE(engine.GetLastErrorMessage() != nullptr);
     CHECK(std::strlen(engine.GetLastErrorMessage()) > 0);
+    CHECK(engine.GetViewportCount() == 0);
 
     engine.ClearLastError();
     CHECK(engine.GetLastError() == CgResult::Ok);

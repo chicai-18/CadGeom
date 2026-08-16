@@ -209,6 +209,110 @@ TEST_CASE("ray/plane intersection", "[math]") {
     }
 }
 
+TEST_CASE("a look-at matrix puts the eye at the origin looking down -Z", "[math][camera]") {
+    const Vec3d eye{10.0, -20.0, 15.0};
+    const Vec3d target{0.0, 0.0, 5.0};
+    const Mat4d view = Mat4LookAt(eye, target, Vec3d{0, 0, 1});
+
+    const Vec3d eyeInView = TransformPoint(view, eye);
+    CHECK(eyeInView.x == Approx(0.0).margin(1e-12));
+    CHECK(eyeInView.y == Approx(0.0).margin(1e-12));
+    CHECK(eyeInView.z == Approx(0.0).margin(1e-12));
+
+    // View space is right-handed with the camera looking along -Z, so the
+    // target lands on the negative Z axis at exactly its distance.
+    const Vec3d targetInView = TransformPoint(view, target);
+    CHECK(targetInView.x == Approx(0.0).margin(1e-12));
+    CHECK(targetInView.y == Approx(0.0).margin(1e-12));
+    CHECK(targetInView.z == Approx(-Distance(eye, target)));
+}
+
+TEST_CASE("projections map onto Vulkan clip space", "[math][camera]") {
+    // Vulkan, not OpenGL: depth runs 0..1 rather than -1..1, and +Y points
+    // down. Getting either wrong renders an upside-down or z-inverted scene
+    // that still looks plausible in a screenshot.
+    SECTION("orthographic") {
+        const Mat4d p = Mat4Ortho(-2.0, 2.0, -1.0, 1.0, 1.0, 101.0);
+
+        CHECK(TransformPoint(p, Vec3d{0.0, 0.0, -1.0}).z == Approx(0.0).margin(1e-12));
+        CHECK(TransformPoint(p, Vec3d{0.0, 0.0, -101.0}).z == Approx(1.0));
+
+        // World +Y maps to clip -Y.
+        CHECK(TransformPoint(p, Vec3d{0.0, 1.0, -50.0}).y == Approx(-1.0));
+        CHECK(TransformPoint(p, Vec3d{2.0, 0.0, -50.0}).x == Approx(1.0));
+    }
+
+    SECTION("perspective") {
+        const Mat4d p = Mat4Perspective(60.0 * kDegToRad, 16.0 / 9.0, 0.5, 500.0);
+
+        // TransformPoint divides by w, so these are already NDC.
+        CHECK(TransformPoint(p, Vec3d{0.0, 0.0, -0.5}).z == Approx(0.0).margin(1e-9));
+        CHECK(TransformPoint(p, Vec3d{0.0, 0.0, -500.0}).z == Approx(1.0));
+        CHECK(TransformPoint(p, Vec3d{0.0, 1.0, -10.0}).y < 0.0);
+
+        // The w a point behind the eye comes back with is what WorldToScreen
+        // tests to reject it.
+        const Vec4d behind = TransformVec4(p, Vec4d{0.0, 0.0, 10.0, 1.0});
+        CHECK(behind.w < 0.0);
+    }
+}
+
+TEST_CASE("inverting a view-projection round-trips a point", "[math][camera]") {
+    // This is the identity ScreenToRay depends on: unprojecting the corners of
+    // a pixel has to land back on the ray that projected onto it.
+    const Mat4d view = Mat4LookAt(Vec3d{30.0, -40.0, 25.0}, Vec3d{1.0, 2.0, 3.0}, Vec3d{0, 0, 1});
+    const Mat4d viewProj = Mat4Perspective(45.0 * kDegToRad, 4.0 / 3.0, 0.1, 1000.0) * view;
+
+    Mat4d inverse{};
+    REQUIRE(Invert(viewProj, inverse));
+
+    const Vec3d world{7.0, -3.0, 12.0};
+    const Vec3d roundTrip = TransformPoint(inverse, TransformPoint(viewProj, world));
+    CHECK(roundTrip.x == Approx(world.x).margin(1e-9));
+    CHECK(roundTrip.y == Approx(world.y).margin(1e-9));
+    CHECK(roundTrip.z == Approx(world.z).margin(1e-9));
+
+    const Mat4d identity = viewProj * inverse;
+    for (int i = 0; i < 16; ++i) {
+        CHECK(identity.m[i] == Approx(Mat4Identity().m[i]).margin(1e-9));
+    }
+}
+
+TEST_CASE("a singular matrix reports failure instead of returning NaNs", "[math][camera]") {
+    Mat4d singular{};  // All zeroes.
+    Mat4d out = Mat4Identity();
+    CHECK_FALSE(Invert(singular, out));
+
+    // The convenience form falls back to identity rather than poisoning
+    // whatever it is multiplied into.
+    const Mat4d fallback = Inverse(singular);
+    CHECK(fallback.m[0] == Approx(1.0));
+    CHECK(fallback.m[5] == Approx(1.0));
+}
+
+TEST_CASE("camera-relative rendering keeps far-from-origin precision", "[math][camera]") {
+    // The whole reason viewProj is built with the eye at the origin: the same
+    // view a million units out, done absolutely, loses the millimetre.
+    const Vec3d cameraOrigin{1'000'000.0, 500'000.0, 300.0};
+    const Vec3d point = cameraOrigin + Vec3d{10.0, 20.0, 0.001};
+    const double nudge = 0.001;
+
+    // Narrowed where it stands, a millimetre of movement disappears: one float
+    // ULP at 1e6 is about 0.06 units.
+    CHECK(static_cast<float>(point.x) == static_cast<float>(point.x + nudge));
+
+    // Narrowed after subtracting the camera origin in double, it survives.
+    CHECK(static_cast<float>(point.x - cameraOrigin.x) !=
+          static_cast<float>(point.x + nudge - cameraOrigin.x));
+
+    // And the relative view matrix has no huge translation to cancel out.
+    const Mat4d relativeView =
+        Mat4LookAt(Vec3d{0, 0, 0}, Vec3d{10.0, 20.0, -5.0}, Vec3d{0, 0, 1});
+    CHECK(std::fabs(relativeView.m[12]) < 1e-12);
+    CHECK(std::fabs(relativeView.m[13]) < 1e-12);
+    CHECK(std::fabs(relativeView.m[14]) < 1e-12);
+}
+
 TEST_CASE("double precision survives CAD-scale coordinates", "[math]") {
     // A model placed at a survey coordinate is exactly where float breaks down,
     // and why the kernel is double all the way through.

@@ -1,11 +1,15 @@
-# The standalone demo. At M0 it is a console harness that exercises the whole
-# public surface and reports which milestone each unimplemented area is waiting
-# on; M1 turns it into an actual window with a grid and an orbit camera, which
-# is why it already links GLFW.
+# The standalone demo: a console pass over the public surface, then a real
+# window with a grid and an orbit camera.
+#
+# It links nothing but cadgeom - not even GLFW. The window belongs to the
+# engine (SurfaceKind::Glfw), which is the whole point of that backend: a host
+# gets a 3D view without taking on a windowing dependency of its own. Linking
+# GLFW here as well would put two copies of its process-wide state in one
+# process.
 
 add_executable(glfw_viewer main.cpp)
 
-target_link_libraries(glfw_viewer PRIVATE CadGeom::cadgeom glfw)
+target_link_libraries(glfw_viewer PRIVATE CadGeom::cadgeom)
 target_compile_features(glfw_viewer PRIVATE cxx_std_20)
 
 # So the demo can report whether the engine it loaded has a renderer in it.

@@ -1,18 +1,25 @@
-// CadGeom demo host — milestone M0.
+// CadGeom demo host — milestones M0 and M1.
 //
-// M0's acceptance is "the demo creates and releases an engine with no leaks",
-// so this walks the entire public surface once and reports what it finds. The
-// parts that are not built yet answer with the milestone that brings them,
-// which makes this file double as a live status report on the engine.
+// Two phases, deliberately separate:
 //
-// M1 replaces the body of RunDemo() with a real window, a grid and an orbit
-// camera; the setup and teardown around it stay as they are.
+//   1. A pass over the public surface with no GPU in sight. This is M0's
+//      acceptance test — create, exercise, release, prove nothing leaked — and
+//      it is bracketed by a CRT heap checkpoint, so it has to stay free of
+//      anything that allocates behind the engine's back.
+//   2. A viewport: a window, a grid, an orbit camera and a shaded solid. Run
+//      with --headless it renders off-screen and writes a PNG instead, which is
+//      how the renderer gets verified on a machine with no display.
+//
+// Note what this file does *not* link: GLFW. The window belongs to the engine
+// (SurfaceKind::Glfw), and the host only forwards a frame loop.
 
 #include <cadgeom/CadGeomRAII.h>
 
-#include <GLFW/glfw3.h>
-
+#include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <string>
 
 #if defined(_MSC_VER) && defined(_DEBUG)
@@ -96,9 +103,62 @@ void Pending(const char* what, cadgeom::ICadEngine& engine) {
     engine.ClearLastError();
 }
 
+struct Options {
+    bool headless{false};
+    bool apiOnly{false};
+    bool perspective{false};
+    uint32_t frames{0};  ///< 0 = until the window closes (or 4 when headless).
+    std::string screenshotPath;
+    uint32_t width{1280};
+    uint32_t height{720};
+};
+
+Options ParseOptions(int argc, char** argv) {
+    Options options;
+    for (int i = 1; i < argc; ++i) {
+        const char* arg = argv[i];
+        const auto next = [&]() -> const char* { return (i + 1 < argc) ? argv[++i] : nullptr; };
+
+        if (std::strcmp(arg, "--headless") == 0) {
+            options.headless = true;
+            if (options.screenshotPath.empty()) {
+                options.screenshotPath = "cadgeom_m1.png";
+            }
+        } else if (std::strcmp(arg, "--api-only") == 0) {
+            options.apiOnly = true;
+        } else if (std::strcmp(arg, "--perspective") == 0) {
+            options.perspective = true;
+        } else if (std::strcmp(arg, "--screenshot") == 0) {
+            if (const char* path = next()) {
+                options.screenshotPath = path;
+            }
+        } else if (std::strcmp(arg, "--frames") == 0) {
+            if (const char* count = next()) {
+                options.frames = static_cast<uint32_t>(std::atoi(count));
+            }
+        } else if (std::strcmp(arg, "--size") == 0) {
+            const char* w = next();
+            const char* h = next();
+            if (w && h) {
+                options.width = static_cast<uint32_t>(std::atoi(w));
+                options.height = static_cast<uint32_t>(std::atoi(h));
+            }
+        } else {
+            std::printf("usage: glfw_viewer [--headless] [--api-only] [--perspective]\n"
+                        "                   [--screenshot PATH] [--frames N] [--size W H]\n");
+        }
+    }
+    if (options.headless && options.frames == 0) {
+        options.frames = 4;
+    }
+    return options;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1 — the public surface, no GPU involved (M0)
 // ---------------------------------------------------------------------------
 
-bool RunDemo(cadgeom::ICadEngine& engine) {
+bool RunApiWalk(cadgeom::ICadEngine& engine) {
     using namespace cadgeom;
     bool ok = true;
 
@@ -178,12 +238,6 @@ bool RunDemo(cadgeom::ICadEngine& engine) {
         Pending("MakeCircle", engine);
     }
 
-    ViewportDesc vpDesc{};
-    vpDesc.surface.title = "CadGeom";
-    if (engine.CreateViewport(vpDesc) == nullptr) {
-        Pending("CreateViewport", engine);
-    }
-
     ExportOptions exportOptions{};
     if (CgFailed(engine.GetIoRegistry()->Export("out.glb", exportOptions, nullptr, nullptr))) {
         Pending("Export", engine);
@@ -196,36 +250,138 @@ bool RunDemo(cadgeom::ICadEngine& engine) {
     return ok;
 }
 
-/// The Vulkan SDK is the one thing not vendored, and its absence is what blocks
-/// M1. Checking it here means the demo tells you before you get there.
-void ReportM1Readiness() {
-    Section("M1 readiness");
-    if (!glfwInit()) {
-        std::printf("  [FAIL] GLFW failed to initialise\n");
-        return;
-    }
-    std::printf("  [ ok ] GLFW %s\n", glfwGetVersionString());
+// ---------------------------------------------------------------------------
+// Phase 2 — the renderer (M1)
+// ---------------------------------------------------------------------------
 
-    // The loader ships with the GPU driver; the headers, validation layers and
-    // glslc come from the LunarG SDK. Having the first says nothing about the
-    // second, and it is the second that M1 needs.
-    if (glfwVulkanSupported()) {
-        std::printf("  [ ok ] runtime Vulkan loader found (driver-provided)\n");
-    } else {
-        std::printf("  [ -- ] no Vulkan loader; this machine cannot present a Vulkan surface\n");
+void PrintCameraHelp() {
+    std::printf("  middle drag  orbit          shift+middle / right drag  pan\n"
+                "  wheel        zoom at cursor  double middle-click        zoom to fit\n"
+                "  1..7         standard views  F fit   P ortho/persp   G grid   W wireframe\n");
+}
+
+bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
+    using namespace cadgeom;
+    bool ok = true;
+
+    ViewportDesc desc{};
+    desc.surface.kind = options.headless ? SurfaceKind::Headless : SurfaceKind::Glfw;
+    desc.surface.width = options.width;
+    desc.surface.height = options.height;
+    desc.surface.title = "CadGeom — M1";
+    desc.projection =
+        options.perspective ? ProjectionMode::Perspective : ProjectionMode::Orthographic;
+    // Linear light: the renderer composes in a float target and the swapchain
+    // blit applies the sRGB encode, so this is darker on screen than it looks.
+    desc.background = Color{0.035f, 0.038f, 0.045f, 1.0f};
+    desc.showGrid = true;
+    desc.vsync = true;
+
+    IViewport* viewport = engine.CreateViewport(desc);
+    if (!viewport) {
+        std::printf("  [FAIL] CreateViewport: %s\n", engine.GetLastErrorMessage());
+        return false;
     }
-#if CADGEOM_HAS_VULKAN
-    std::printf("  [ ok ] built against the Vulkan SDK\n");
-#else
-    std::printf("  [ -- ] built without the Vulkan SDK; install LunarG >= 1.3.275 and "
-                "reconfigure before starting M1\n");
-#endif
-    glfwTerminate();
+    ok &= Check(true, options.headless ? "headless viewport created" : "window created");
+    std::printf("         device: %s\n", engine.GetDeviceName());
+    ok &= Check(engine.GetViewportCount() == 1, "the engine tracks its viewport");
+
+    ICamera* camera = viewport->GetCamera();
+    ok &= Check(camera != nullptr, "viewport exposes its camera");
+
+    // Prove the camera's screen mapping is self-consistent before trusting
+    // anything drawn through it: the centre pixel's ray has to come back to the
+    // centre pixel.
+    uint32_t width = 0;
+    uint32_t height = 0;
+    viewport->GetSize(width, height);
+    Ray ray{};
+    camera->ScreenToRay(width * 0.5, height * 0.5, ray);
+    Vec2d back{};
+    const Vec3d ahead{ray.origin.x + ray.dir.x * 10.0, ray.origin.y + ray.dir.y * 10.0,
+                      ray.origin.z + ray.dir.z * 10.0};
+    ok &= Check(camera->WorldToScreen(ahead, back) &&
+                    std::abs(back.x - width * 0.5) < 1.0 && std::abs(back.y - height * 0.5) < 1.0,
+                "ScreenToRay and WorldToScreen agree");
+
+    if (!options.headless) {
+        PrintCameraHelp();
+    }
+
+    auto previous = std::chrono::steady_clock::now();
+    uint32_t frames = 0;
+    CgResult lastRender = CgResult::Ok;
+
+    while (true) {
+        const auto now = std::chrono::steady_clock::now();
+        const double delta = std::chrono::duration<double>(now - previous).count();
+        previous = now;
+
+        // Tick first, every frame: it drains the window's event queue, retires
+        // finished GPU resources and brings the GPU's copy of the scene up to
+        // date. Rendering without it would show the previous frame's state.
+        engine.Tick(delta);
+
+        lastRender = viewport->Render();
+        if (CgFailed(lastRender)) {
+            std::printf("  [FAIL] Render: %s\n", engine.GetLastErrorMessage());
+            break;
+        }
+        ++frames;
+
+        if (options.frames > 0 && frames >= options.frames) {
+            break;
+        }
+        if (!options.headless && viewport->ShouldClose()) {
+            break;
+        }
+    }
+
+    ok &= Check(CgSucceeded(lastRender), "frames rendered without error");
+    std::printf("         %u frame(s)\n", frames);
+
+    if (options.headless) {
+        // Only meaningful headless: a GLFW window's size belongs to the window
+        // system, so Resize() there is a notification, not an instruction.
+        // This is the swapchain/target rebuild path a host embedding the engine
+        // hits on every window drag.
+        const uint32_t halfWidth = options.width / 2;
+        const uint32_t halfHeight = options.height / 2;
+        viewport->Resize(halfWidth, halfHeight);
+        engine.Tick(0.016);
+        ok &= Check(CgSucceeded(viewport->Render()), "rendered again after a resize");
+
+        uint32_t resizedWidth = 0;
+        uint32_t resizedHeight = 0;
+        viewport->GetSize(resizedWidth, resizedHeight);
+        ok &= Check(resizedWidth == halfWidth && resizedHeight == halfHeight,
+                    "the viewport reports its new size");
+
+        viewport->Resize(options.width, options.height);
+        engine.Tick(0.016);
+        viewport->Render();
+    }
+
+    if (!options.screenshotPath.empty()) {
+        const CgResult saved = viewport->SaveScreenshot(options.screenshotPath.c_str());
+        ok &= Check(CgSucceeded(saved), "screenshot written");
+        if (CgSucceeded(saved)) {
+            std::printf("         %s\n", options.screenshotPath.c_str());
+        } else {
+            std::printf("         %s\n", engine.GetLastErrorMessage());
+        }
+    }
+
+    viewport->Release();
+    ok &= Check(engine.GetViewportCount() == 0, "releasing the viewport unregistered it");
+    return ok;
 }
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    const Options options = ParseOptions(argc, argv);
+
     std::printf("CadGeom demo host\n");
 
     Section("ABI handshake");
@@ -235,6 +391,11 @@ int main() {
     std::printf("  library   : %u.%u.%u\n", CADGEOM_VERSION_MAJOR(dllVersion),
                 CADGEOM_VERSION_MINOR(dllVersion), CADGEOM_VERSION_PATCH(dllVersion));
     std::printf("  build     : %s\n", CadGeom_GetBuildInfo());
+#if CADGEOM_HAS_VULKAN
+    std::printf("  renderer  : built against the Vulkan SDK\n");
+#else
+    std::printf("  renderer  : not built; install LunarG >= 1.3.275 and reconfigure\n");
+#endif
 
     bool ok = Check(CadGeom_IsApiVersionCompatible(CADGEOM_API_VERSION) != 0,
                     "the loaded library speaks our API version");
@@ -242,32 +403,31 @@ int main() {
         return 1;
     }
 
+    cadgeom::EngineDesc desc{};
+    desc.applicationName = "CadGeom demo host";
+    desc.enableValidation = true;
+    desc.logLevel = cadgeom::LogLevel::Debug;
+    desc.logCallback = &LogToConsole;
+
+    // -- Phase 1 ------------------------------------------------------------
+    // Bracketed on its own so the heap check measures the engine and nothing
+    // else. A Vulkan device brings driver allocations with it that outlive any
+    // scope we control, which is why the renderer gets its own engine below.
     const uint64_t objectsBefore = CadGeom_GetLiveObjectCount();
 
 #if CADGEOM_DEMO_HEAP_CHECK
-    // Bracketing the engine's whole lifetime rather than dumping at exit: this
-    // measures exactly what the engine allocated and freed, with no false
-    // positives from statics that outlive main. The DLL and this executable
-    // share the debug CRT heap, so DLL-side allocations are counted too.
     _CrtMemState heapBefore;
     _CrtMemCheckpoint(&heapBefore);
 #endif
 
     {
-        cadgeom::EngineDesc desc{};
-        desc.applicationName = "CadGeom demo host";
-        desc.enableValidation = true;
-        desc.logLevel = cadgeom::LogLevel::Debug;
-        desc.logCallback = &LogToConsole;
-
         cadgeom::EnginePtr engine = cadgeom::CreateEngine(desc);
         if (!engine) {
             std::printf("  [FAIL] engine creation: %s\n", CadGeom_GetCreateEngineError());
             return 1;
         }
         std::printf("  [ ok ] engine created\n");
-
-        ok &= RunDemo(*engine);
+        ok &= RunApiWalk(*engine);
     }
 
     Section("Teardown");
@@ -292,8 +452,28 @@ int main() {
     std::printf("  [ -- ] CRT heap check runs in a Debug MSVC build only\n");
 #endif
 
-    ReportM1Readiness();
+    // -- Phase 2 ------------------------------------------------------------
+#if !CADGEOM_HAS_VULKAN
+    // Not a failure: a build without the SDK is a documented configuration, and
+    // everything through M0 still works in it.
+    Section("Renderer");
+    std::printf("  [ -- ] this library was built without the Vulkan SDK, so there is no "
+                "renderer to exercise\n");
+#else
+    if (!options.apiOnly) {
+        Section(options.headless ? "Renderer (headless)" : "Renderer");
+        cadgeom::EnginePtr engine = cadgeom::CreateEngine(desc);
+        if (!engine) {
+            std::printf("  [FAIL] engine creation: %s\n", CadGeom_GetCreateEngineError());
+            return 1;
+        }
+        ok &= RunViewport(*engine, options);
+    }
+#endif
 
-    std::printf("\n%s\n", ok ? "M0 demo passed." : "M0 demo FAILED.");
+    const uint64_t finalLeak = CadGeom_GetLiveObjectCount() - objectsBefore;
+    ok &= Check(finalLeak == 0, "nothing outlived the second engine either");
+
+    std::printf("\n%s\n", ok ? "Demo passed." : "Demo FAILED.");
     return ok ? 0 : 1;
 }

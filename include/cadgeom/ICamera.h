@@ -69,7 +69,13 @@ public:
 
     // -- Matrices & projection helpers --------------------------------------
 
+    /// View space is right-handed with the camera looking along -Z.
     virtual void GetViewMatrix(Mat4d& out) const = 0;
+
+    /// Projects into Vulkan's clip space: x and y in [-1, 1] with **+y down**,
+    /// and z in [0, 1] — not OpenGL's [-1, 1]. The y flip lives here rather
+    /// than in a negative viewport height, so this is the matrix the engine
+    /// actually drew with and ScreenToRay/WorldToScreen agree with it.
     virtual void GetProjectionMatrix(Mat4d& out) const = 0;
 
     /// Viewport pixel (top-left origin) to a world-space ray.

@@ -10,6 +10,7 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(GNUInstallDirs)
 include(GenerateExportHeader)
 include(CMakePackageConfigHelpers)
+include(CadGeomShaders)
 
 # ---------------------------------------------------------------------------
 # Options
@@ -66,10 +67,33 @@ if(CADGEOM_ENABLE_VULKAN)
             "  M0 (engine skeleton, scene, tests) builds and runs fine without it.")
         set(CADGEOM_ENABLE_VULKAN OFF)
     elseif(NOT Vulkan_GLSLC_EXECUTABLE)
+        # The renderer's shaders are compiled into the DLL, so no glslc means no
+        # renderer. A driver-provided vulkan-1.dll looks like a Vulkan install
+        # and lands here; saying so beats failing later with a missing header.
         message(WARNING
-            "Found the Vulkan loader but not glslc; shaders cannot be compiled. "
-            "Install the full LunarG SDK rather than just the runtime.")
+            "Found the Vulkan loader but not glslc - building without the renderer.\n"
+            "  Install the full LunarG SDK; the runtime alone does not include the compiler.")
+        set(CADGEOM_ENABLE_VULKAN OFF)
     endif()
+endif()
+
+if(CADGEOM_ENABLE_VULKAN)
+    # The renderer's own dependencies. GLFW is in here rather than under the
+    # examples because the engine ships a GLFW-backed ISurface: a host that
+    # wants a window without writing platform code asks for SurfaceKind::Glfw
+    # and the engine owns the window and its message loop
+    # (docs/architecture.md §4.4).
+    cadgeom_require_submodule(glfw)
+    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
+    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
+    add_subdirectory(external/glfw EXCLUDE_FROM_ALL)
+    # Static library going into a shared one.
+    set_property(TARGET glfw PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+    cadgeom_require_submodule(VulkanMemoryAllocator)
+    add_subdirectory(external/VulkanMemoryAllocator EXCLUDE_FROM_ALL)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -96,6 +120,9 @@ set(CADGEOM_SOURCES
     src/core/Error.cpp
     src/core/Log.cpp
     src/core/ObjectTracker.cpp
+    src/core/Png.cpp
+    src/geom/MeshData.cpp
+    src/interact/OrbitCamera.cpp
     src/api/CommandStackImpl.cpp
     src/api/EngineImpl.cpp
     src/api/EntityImpl.cpp
@@ -105,6 +132,34 @@ set(CADGEOM_SOURCES
     src/api/SceneImpl.cpp
     src/api/SelectionImpl.cpp
     src/api/ToolManagerImpl.cpp)
+
+# The renderer and everything that can only exist alongside it. Without the
+# Vulkan SDK these drop out and CreateViewport reports why.
+set(CADGEOM_RENDER_SOURCES
+    src/api/ViewportImpl.cpp
+    src/render/FrameData.cpp
+    src/render/GpuScene.cpp
+    src/render/Renderer.cpp
+    src/render/RenderSystem.cpp
+    src/render/Surface.cpp
+    src/render/pass/GridPass.cpp
+    src/render/pass/MeshPass.cpp
+    src/render/vk/Common.cpp
+    src/render/vk/Context.cpp
+    src/render/vk/Pipeline.cpp
+    src/render/vk/Resources.cpp
+    src/render/vk/Swapchain.cpp
+    src/render/vk/VmaImpl.cpp)
+
+set(CADGEOM_SHADERS
+    shaders/grid.vert
+    shaders/grid.frag
+    shaders/mesh.vert
+    shaders/mesh.frag)
+
+if(CADGEOM_ENABLE_VULKAN)
+    list(APPEND CADGEOM_SOURCES ${CADGEOM_RENDER_SOURCES})
+endif()
 
 add_library(cadgeom SHARED ${CADGEOM_SOURCES} ${CADGEOM_PUBLIC_HEADERS})
 add_library(CadGeom::cadgeom ALIAS cadgeom)
@@ -148,8 +203,19 @@ else()
 endif()
 
 if(CADGEOM_ENABLE_VULKAN)
-    target_link_libraries(cadgeom PRIVATE Vulkan::Vulkan)
+    target_link_libraries(cadgeom PRIVATE
+        Vulkan::Vulkan
+        GPUOpen::VulkanMemoryAllocator
+        glfw)
     target_compile_definitions(cadgeom PRIVATE CADGEOM_HAS_VULKAN=1)
+
+    # GLSL -> SPIR-V -> uint32_t array compiled into the DLL, so a deployed
+    # cadgeom.dll has no shader files to lose (docs/architecture.md §4.5).
+    cadgeom_add_shaders(cadgeom
+        OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        SOURCES    ${CADGEOM_SHADERS}
+        INCLUDES   shaders/Common.glsl)
+
 else()
     target_compile_definitions(cadgeom PRIVATE CADGEOM_HAS_VULKAN=0)
 endif()
@@ -161,12 +227,6 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${CADGEOM_SOURCES} ${CADGE
 # ---------------------------------------------------------------------------
 
 if(CADGEOM_BUILD_EXAMPLES)
-    cadgeom_require_submodule(glfw)
-    set(GLFW_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
-    set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
-    add_subdirectory(external/glfw EXCLUDE_FROM_ALL)
     add_subdirectory(examples/glfw_viewer)
 endif()
 
