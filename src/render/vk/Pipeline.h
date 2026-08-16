@@ -23,7 +23,6 @@ public:
                                             const VkVertexInputAttributeDescription* attributes,
                                             uint32_t attributeCount);
     GraphicsPipelineBuilder& SetTopology(VkPrimitiveTopology topology);
-    GraphicsPipelineBuilder& SetPolygonMode(VkPolygonMode mode);
     GraphicsPipelineBuilder& SetCullMode(VkCullModeFlags mode, VkFrontFace frontFace);
     GraphicsPipelineBuilder& SetDepth(bool test, bool write, VkCompareOp compare);
     GraphicsPipelineBuilder& SetDepthBias(float constantFactor, float slopeFactor);
@@ -41,7 +40,6 @@ private:
     std::vector<VkVertexInputAttributeDescription> attributes_;
 
     VkPrimitiveTopology topology_{VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
-    VkPolygonMode polygonMode_{VK_POLYGON_MODE_FILL};
     VkCullModeFlags cullMode_{VK_CULL_MODE_NONE};
     VkFrontFace frontFace_{VK_FRONT_FACE_COUNTER_CLOCKWISE};
 

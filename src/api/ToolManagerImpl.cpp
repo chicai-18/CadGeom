@@ -15,11 +15,6 @@ struct PendingTool {
 /// @return null 表示这个 id 压根不是内置的 —— 对宿主的 id 来说就是「你没注册过」。
 const PendingTool* PendingBuiltin(ToolId id) {
     switch (id) {
-        case ToolId::Extrude: {
-            static const PendingTool pending{"Extrude",
-                                             "M4, with profile triangulation and solid topology"};
-            return &pending;
-        }
         case ToolId::Scale: {
             static const PendingTool pending{"Scale", "M6, with the rest of the polish"};
             return &pending;

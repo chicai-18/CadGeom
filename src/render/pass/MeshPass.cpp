@@ -40,20 +40,14 @@ CgResult MeshPass::Initialize(vk::Context& ctx, VkPipelineLayout layout) {
         // normal for back faces so both sides light correctly.
         .SetCullMode(VK_CULL_MODE_NONE, VK_FRONT_FACE_COUNTER_CLOCKWISE)
         .SetDepth(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
+        // 表面整体往后推一格深度单位，斜面按坡度多推一点。EdgePass 画的特征边就
+        // 贴在这些面上，推开表面比给边加一个固定的 NDC 偏移可靠得多：depth bias
+        // 的单位是深度缓冲自己的最小可分辨量，一个一米的零件和一个一毫米的零件
+        // 因此都合适，而固定偏移量在小零件上会让背面的边从正面透出来。
+        .SetDepthBias(1.0f, 1.5f)
         .SetFormats(kColorFormat, kDepthFormat);
 
     r = builder.Build(ctx, layout, fill_);
-
-    if (CgSucceeded(r) && ctx.SupportsFillModeNonSolid()) {
-        // A stand-in for RenderMode::Wireframe until the EdgePass in M4 draws
-        // real feature edges. Optional because fillModeNonSolid is optional.
-        builder.SetPolygonMode(VK_POLYGON_MODE_LINE);
-        const CgResult wire = builder.Build(ctx, layout, wireframe_);
-        if (CgFailed(wire)) {
-            CG_WARN("wireframe pipeline unavailable; RenderMode::Wireframe will render shaded");
-            wireframe_ = VK_NULL_HANDLE;
-        }
-    }
 
     vkDestroyShaderModule(ctx.Device(), vertex, nullptr);
     vkDestroyShaderModule(ctx.Device(), fragment, nullptr);
@@ -65,10 +59,6 @@ void MeshPass::Shutdown(vk::Context& ctx) {
         vkDestroyPipeline(ctx.Device(), fill_, nullptr);
         fill_ = VK_NULL_HANDLE;
     }
-    if (wireframe_ != VK_NULL_HANDLE) {
-        vkDestroyPipeline(ctx.Device(), wireframe_, nullptr);
-        wireframe_ = VK_NULL_HANDLE;
-    }
 }
 
 void MeshPass::Record(VkCommandBuffer cmd, VkPipelineLayout layout, const GpuScene& gpuScene,
@@ -77,9 +67,7 @@ void MeshPass::Record(VkCommandBuffer cmd, VkPipelineLayout layout, const GpuSce
         return;
     }
 
-    const VkPipeline pipeline =
-        (view.wireframe && wireframe_ != VK_NULL_HANDLE) ? wireframe_ : fill_;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fill_);
 
     const VkDeviceSize offset = 0;
     VkBuffer vertexBuffer = gpuScene.VertexBuffer();

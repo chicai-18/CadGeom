@@ -7,23 +7,24 @@ break by accident.
 
 ## Current state
 
-Milestone **M3 complete** (BVH, picking, selection highlight, gizmos, snapping).
-See `docs/architecture.md` §9 for the plan.
+Milestone **M4 complete** (profile triangulation, extrude + topology, `EdgePass`,
+`ExtrudeTool`). See `docs/architecture.md` §9 for the plan.
 
 | | Status |
 |---|---|
 | Public headers (`include/cadgeom/`) | Complete — the contract is frozen from here |
 | Engine lifecycle, scene graph, selection, undo stack, IO registry | Working |
 | Vulkan context/swapchain/RHI, orbit camera, screenshots | Working |
-| `GridPass` `MeshPass` `LinePass` `PointPass` + overlay previews | Working |
+| `GridPass` `MeshPass` `EdgePass` `LinePass` `PointPass` + overlay previews | Working |
 | `ISurface`: GLFW, native Win32, headless | Working (X11/Wayland/Cocoa report `NotSupported`) |
 | `SimpleKernel`: point/line/circle/arc/rectangle/polyline, tessellation, bounds | Working |
 | WorkPlane, `IToolContext`, Select/Point/Line/Circle/Rectangle/Polyline tools | Working |
 | BVH, `Raycast`/`Pick`/`SetWorkPlaneFromPick`, selection highlight, Move/Rotate gizmos | Working |
 | Snapping | Working except `Snap_Perpendicular` — see below |
-| Extrude, topology, `EdgePass` | **M4** — `Extrude` returns `NotImplemented` |
-| OBJ / glTF handlers | **M5** |
+| `Extrude`, solid topology, per-face picking, `ExtrudeTool` | Working |
+| OBJ / glTF handlers, `ShapeType::Mesh` | **M5** |
 | MSAA, ImGui panels, overlay text, Scale/Measure tools | **M6** — `ViewportDesc::sampleCount` is ignored with a warning |
+| `RenderMode::HiddenLine` | **M6** — behaves as `ShadedWithEdges` for now |
 
 Anything not built yet fails with `CgResult::NotImplemented` and an error
 message naming the milestone. Keep that habit: a host wiring itself up against
@@ -67,7 +68,9 @@ Two consequences already bite:
   point list. `GetParams` on a polyline therefore returns its `type` and an
   unused union, and `SetParams` returns `NotSupported`. The kernel's own
   `geom::ShapeDef` carries the points; that is the internal type and it is free
-  to hold STL.
+  to hold STL. The same gap is why `ExtrudeTool` can preview the top face of a
+  circle or a rectangle exactly but draws only a height guide for a polyline —
+  a tool sees what a host sees, and neither can read those points back.
 - `IToolContext::SnapAt` takes a pixel and nothing else, so there is nowhere to
   pass the reference point a perpendicular snap is measured *from*. Every other
   `SnapType` works; `Snap_Perpendicular` waits for an extension interface in M6.
@@ -139,6 +142,23 @@ what that pointer means.
 - **An entity owns its shape.** Destroying one hands the shape back to the
   kernel; an undoable delete calls `DetachShape()` first and takes ownership
   until it falls off the stack.
+- **A solid carries its own copy of the profile it was swept from**
+  (`geom::ShapeDef::profile`), not a reference to one. `ExtrudeParams::profile`
+  is the *provenance* — the id may go stale the moment the host deletes the
+  sketch, and a solid that dangled with it could not re-sweep when its height
+  changed. That copy is also why `SetParams` refuses to swap the profile out:
+  changing which loop is swept means a new extrusion, not an edited one.
+- **A solid's feature edges are `Topology.edges`, not its triangle edges.** They
+  ride in `SceneSnapshot::edgeItems` and go through `EdgePass` with
+  `EntityStyle::edgeColor`; curves stay in `curveItems` and go through
+  `LinePass`. A smooth face (a cylinder's side) contributes no vertical edges and
+  no topology vertices at all — those points are tessellation artefacts, and
+  emitting them would put a snap target every six degrees around a circle.
+- **The depth offset that keeps edges off their own surface lives in `MeshPass`**,
+  as a rasterizer depth bias pushing faces *back*. Its unit is the depth buffer's
+  own resolution, so it works for a one-metre part and a one-millimetre part
+  alike; a fixed NDC bias on the edges would let the far side of a small solid
+  poke through the near side.
 - **Lines and points are expanded to screen-space quads in the vertex shader**,
   never `VK_POLYGON_MODE_LINE`. `wideLines` is optional, most drivers clamp to
   1.0, and neither can dash. Dash phase comes from per-segment arc length times
@@ -196,10 +216,15 @@ build/bin/Debug/glfw_viewer.exe --perspective --frames 300
 Targets: `cadgeom` (the only shipped artifact), `cadgeom_tests`, `glfw_viewer`.
 
 In the window, `V X L C R Y` pick the Select/Point/Line/Circle/Rectangle/
-Polyline tools, `M` and `T` pick Move and Rotate (`R` was taken; `T` for turn),
-Esc cancels, and Ctrl+Z / Ctrl+Y undo and redo. Those bindings live in
-`ViewportImpl` rather than in the demo because with `SurfaceKind::Glfw` the
-*engine* owns the window, so the host never sees the key.
+Polyline tools, `E` picks Extrude, `M` and `T` pick Move and Rotate (`R` was
+taken; `T` for turn), Esc cancels, and Ctrl+Z / Ctrl+Y undo and redo. Those
+bindings live in `ViewportImpl` rather than in the demo because with
+`SurfaceKind::Glfw` the *engine* owns the window, so the host never sees the key.
+
+Extruding needs a view that is not looking down the sweep axis: the height comes
+from projecting the mouse ray onto that axis, and in Top view a Z extrusion has
+no solution. Orbit first — the demo's headless run switches to isometric for
+exactly this reason.
 
 The Vulkan SDK is the one dependency not vendored. Without it — or without
 `glslc`, since the shaders are compiled into the DLL — the build drops the

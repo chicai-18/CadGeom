@@ -65,4 +65,24 @@ void FillFrameUniforms(const RenderView& view, uint32_t viewportWidth, uint32_t 
     out.lineParams[3] = 0.0f;
 }
 
+void FillCurvePushConstants(const Mat4d& model, const Vec3d& cameraOrigin, const Color& color,
+                            float width, LineStyle style, float depthBias,
+                            CurvePushConstants& out) {
+    Mat4d relative = model;
+    relative.m[12] -= cameraOrigin.x;
+    relative.m[13] -= cameraOrigin.y;
+    relative.m[14] -= cameraOrigin.z;
+    Narrow(relative, out.model);
+
+    out.color[0] = color.r;
+    out.color[1] = color.g;
+    out.color[2] = color.b;
+    out.color[3] = color.a;
+
+    out.params[0] = width;
+    out.params[1] = static_cast<float>(static_cast<int32_t>(style));
+    out.params[2] = depthBias;
+    out.params[3] = 0.0f;
+}
+
 } // namespace cadgeom::render

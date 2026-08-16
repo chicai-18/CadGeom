@@ -44,7 +44,11 @@ public:
 private:
     /// Validates, names and commits one definition. kInvalidEntity on failure,
     /// with the reason already in the thread's error slot.
-    EntityId Build(geom::ShapeDef def);
+    ///
+    /// `parent` 和 `local` 只有拉伸会用上 —— 实体是在轮廓的对象空间里扫出来的，
+    /// 所以它得挂在轮廓的父节点下、带着轮廓那一份局部变换。
+    EntityId Build(geom::ShapeDef def, EntityId parent = kInvalidEntity,
+                   const Transform& local = Transform{});
 
     /// "Circle 3" — a per-type running number, so a fresh scene reads as a
     /// parts list rather than as nine objects all called "Circle".

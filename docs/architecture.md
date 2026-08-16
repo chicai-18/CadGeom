@@ -232,6 +232,16 @@ public:
 ```
 拓扑信息不是可选项——拾取要能选中「某个面」、Gizmo 要能拖动「某条边」、后期布尔运算和 STEP 导出全依赖它。
 
+M4 的落地细节：
+
+- **三角化直接上耳切法**，没走「v1 先扇形剖分」那一步。扇形只对凸轮廓成立，而一块带缺口的板子是最普通不过的零件；耳切法多出来的那几十行换掉的是一个会被立刻撞上的限制。
+- **实体自带一份轮廓定义的拷贝**（`geom::ShapeDef::profile`）。`ExtrudeParams::profile` 里的 `ShapeId` 只是出处：轮廓那个实体随时可能被删掉，而「实体拥有自己的形状」意味着形状会跟着一起走。带一份拷贝，实体才是自足的 —— 轮廓没了照样能改高度重新扫掠。
+- **轮廓每次细分都重新离散**，不缓存点表。同一个圆当轮廓拉伸和当曲线画出来，分段数必须一致，否则圆柱底面会和它自己的轮廓线错开一圈。
+- **圆柱侧面是一个面**，不是 n 个四边形：法线逐顶点平均，拓扑里只记一个 `planar = false` 的面，竖直棱一根都不产出 —— 圆柱身上那些线是细分的痕迹，不是零件上的边。硬角轮廓反过来，每段侧面各是一个平面面，棱是真的。面拾取因此报的是面下标：点侧面点到的是「侧面」，不是六十四分之一个侧面。
+- **拔模走逐顶点斜接偏移**。收过头（有一条边掉了头）会被认出来并报错，但凹轮廓在缺口处自交认不出来 —— 那需要一整套直骨架或多边形裁剪。
+- **拉出来的实体与轮廓同父、同局部变换**。扫掠发生在轮廓的对象空间里，`IGeometryBuilder::Extrude` 收的世界方向在那里折算一次，实体因此正好落在轮廓上；轮廓本身留在场景里，它就是贴在实体底面上的那张草图。
+- **拉伸高度是把鼠标射线投到扫掠轴上求出来的**，所以正对着那根轴的视角（顶视图里拉一个躺在 XY 平面上的圆）解不出来。这不是引擎的毛病，是那个视角下这件事本身没有答案，任何 CAD 里都一样。
+
 ---
 
 ## 4. 渲染层（`render/`）
@@ -257,10 +267,12 @@ public:
 |---|---|---|
 | `GridPass` | 无限地面网格 | 全屏三角形，fragment shader 里解析计算网格线 + 距离淡出，零几何 |
 | `MeshPass` | 实体着色 | Blinn-Phong / 简化 PBR，正反面双光照，支持 per-entity 颜色与半透明 |
-| `EdgePass` | 实体轮廓与特征边 | 从 `Topology.edges` 直接取线段，depth bias 防 z-fighting。CAD 的「黑边」是可读性核心 |
+| `EdgePass` | 实体轮廓与特征边 | 从 `Topology.edges` 直接取线段，和 `LinePass` 共用那对着色器与同一个实例缓冲：一条边和一条曲线在 GPU 上是同一种东西。不同的是不写深度、取 `EntityStyle::edgeColor`，而且 `RenderMode::Shaded` 下整批不画。CAD 的「黑边」是可读性核心 |
 | `LinePass` | 独立线/圆/矩形线框 | **屏幕空间 quad 扩展**：instanced draw，每段线 1 个 instance，VS 在 NDC 空间按 `lineWidth` 撑开四边形；支持虚线（沿弧长累计 + `discard`） |
 | `PointPass` | 点图元 | instanced billboard quad，FS 里画圆并 `discard` 外部像素 |
 | `OverlayPass` | Gizmo / 高亮 / 橡皮筋预览 | 独立 depth 策略（Gizmo 常关深度测试保证永远可见） |
+
+防 z-fighting 的偏移**加在实体表面上，不加在边上**：`MeshPass` 把面往后推一格深度单位（`depthBiasConstantFactor`），单位是深度缓冲自己的最小可分辨量，所以一米的零件和一毫米的零件都合适。反过来给边一个固定的 NDC 偏移的话，在小零件上背面的边会从正面透出来。
 
 **为什么不用 `VK_POLYGON_MODE_LINE` / `vkCmdSetLineWidth`：** `wideLines` 是可选 feature，很多驱动只支持宽度 1.0；且线宽是像素级不随投影变化、无法做虚线和端点样式。屏幕空间扩展一次解决全部问题，代价只是 VS 里几行数学。
 
@@ -363,7 +375,7 @@ public:
 | `LineTool` | 点1 → 拖拽预览 → 点2 →（连续模式可续画） |
 | `CircleTool` | 圆心 → 拖拽预览半径 → 确定 |
 | `RectangleTool` | 角点1 → 拖拽预览 → 角点2 |
-| `ExtrudeTool` | 选中闭合轮廓 → 沿法线拖拽预览高度 → 确定 → `ExtrudeCommand` |
+| `ExtrudeTool` | 选中闭合轮廓 → 沿法线拖拽预览高度 → 确定 → 一步可撤销的拉伸（`CreateShapeCommand`，撤销菜单里叫「Extrude」） |
 | `MoveTool` / `RotateTool` | 选中 → Gizmo 拖拽 → `TransformCommand` |
 
 预览几何走 `OverlayPass`，不进场景、不进 undo 栈；只有 commit 时才产出 Command。
@@ -471,7 +483,7 @@ install/
 | **M1 Vulkan 起飞** ✅ | Context/Swapchain/RHI/Renderer、`GridPass`+`MeshPass`、OrbitCamera、ISurface 三后端（Glfw / Win32 / Headless） | 窗口里出现可旋转的网格地面 + 一个立方体 |
 | **M2 几何与线条** ✅ | 内核 + 点/线/圆/矩形、`LinePass`(屏幕空间)、`PointPass`、Tool 状态机、WorkPlane | 鼠标能交互画出点/线/圆/矩形，线宽正确、虚线可用 |
 | **M3 选择与操作** ✅ | BVH、Picker（点/边/面优先级）、Selection 高亮、Gizmo、吸附、CommandStack | 能选中、拖动、旋转，Ctrl+Z/Y 正常 |
-| **M4 拉伸成体** | Profile 三角化、Extrude + Topology、`EdgePass`、`ExtrudeTool` | 圆→圆柱、矩形→立方体，交互式拖拽高度，带轮廓黑边 |
+| **M4 拉伸成体** ✅ | Profile 三角化、Extrude + Topology、`EdgePass`、`ExtrudeTool` | 圆→圆柱、矩形→立方体，交互式拖拽高度，带轮廓黑边 |
 | **M5 数据 IO** | IoRegistry、OBJ 读写、glTF 读写、`extras` 参数化往返 | 导出再导入，参数化信息不丢；Blender 能正常打开 |
 | **M6 打磨** | 吸附、ImGui 面板、多视口、Zoom-to-fit、单位系统 | 可用性达到「能拿来干活」 |
 
@@ -484,7 +496,7 @@ install/
 | ~~**Vulkan SDK 未安装**~~（已解决：1.4.357 已装，M1 在 RTX 3070 Ti 上跑通） | M1 直接阻塞 | 开工前装 LunarG Vulkan SDK ≥ 1.3.275，确认 `VULKAN_SDK` 与 `glslc` 可用 |
 | C++ 纯虚接口的 ABI 脆弱性 | 宿主换编译器 → 诡异崩溃 | §2.2 七条纪律写进 CLAUDE.md；`CadGeom_GetApiVersion()` 启动校验；文档标注支持的编译器矩阵 |
 | Vulkan 样板代码量大，容易淹没进度 | M1 拖长 | 严守 vk RHI 分层，先「能跑」再「优雅」；dynamic rendering + VMA 已砍掉大半样板 |
-| 任意多边形三角化 | M4 只能支持凸轮廓 | v1 凸多边形扇形剖分先跑通；v1.1 引入 earcut（单头文件，MIT） |
+| ~~任意多边形三角化~~（已解决：M4 直接实现耳切法，凹轮廓可用） | M4 只能支持凸轮廓 | 自写耳切法（`geom/Profile.cpp`），比引入依赖便宜，也不必先交一个只支持凸轮廓的版本 |
 | 大坐标精度抖动 | 远离原点时模型抖动 | 内核 double + camera-relative 上传，M1 就做进去，后期返工代价极高 |
 | 参数化与网格不同步 | 改半径不生效 / 幽灵几何 | 严格单向：params 为 SSOT，mesh 为派生缓存，只有 `Tessellate` 能写 mesh |
 

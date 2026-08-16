@@ -50,8 +50,9 @@ public:
     ///        就是从这里开始的。
     /// @param pick 命中结果；新平面过 `pick.point`，法线取 `pick.normal`。
     /// @return kind 为 PickKind::None、或法线是零向量时返回 InvalidArgument。
-    /// @note 圆、圆弧和矩形会把自己的承载平面作为法线报出来，所以在 M4 的实体做
-    ///       出来之前，对着一条平面曲线调用它就已经有意义了。
+    /// @note 命中一个实体的平面面时，法线取的是那个面自己的法线，不是被打中的那
+    ///       个三角形算出来的近似值。命中一条平面曲线（圆 / 圆弧 / 矩形）时取它的
+    ///       承载平面，所以这条路对草图和实体一样通。
     virtual CgResult SetWorkPlaneFromPick(const PickResult& pick) = 0;
 
     // -- Input --------------------------------------------------------------

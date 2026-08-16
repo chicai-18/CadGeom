@@ -88,10 +88,57 @@ struct PolylineData {
     /// starting at `first`, accumulating arc length as it goes. `startLength`
     /// seeds the accumulator so several chains can share one dash phase.
     void AddChain(uint32_t first, uint32_t count, bool closed, double startLength = 0.0);
+
+    /// @brief 追加一条由任意两个已有顶点构成的线段，弧长接着 `length` 往下累。
+    /// @note 实体的竖直棱不属于任何一条连续链 —— 它连的是底环和顶环上隔着 n 个
+    ///       下标的两个点，AddChain 的连续区间表达不了。
+    void AddSegment(uint32_t a, uint32_t b);
 };
 
-/// Axis-aligned box with flat (per-face) normals, centred on `center`.
-/// `size` is the full extent along each axis, not the half-extent.
-MeshData MakeBox(const Vec3d& center, const Vec3d& size);
+/// @brief 实体的拓扑：面 / 边 / 顶点（docs/architecture.md §3.3）。
+///
+/// 拓扑不是可选项。拾取要能选中「某个面」，Gizmo 要能拖「某条边」，后期的布尔
+/// 运算和 STEP 导出全依赖它，而这些都是补不回来的东西 —— 三角形汤里找不回一个
+/// 圆柱侧面是一个面这件事。
+///
+/// 三个列表都是**索引**，指向同一个形状里的 MeshData 和 PolylineData，自己不存
+/// 任何几何：网格重新细分时它跟着一起重建，两边因此不可能对不上。
+struct Topology {
+    /// @brief 一个面 —— 网格里一段连续的三角形。
+    struct Face {
+        /// 索引到 MeshData::indices，以三角形计（即 indices 下标 / 3）。
+        uint32_t firstTriangle{0};
+        uint32_t triangleCount{0};
+        /// 面法线，仅当 `planar` 为 true 时有意义；否则是零向量。
+        Vec3d normal{0.0, 0.0, 0.0};
+        /// 平面面为 true。圆柱侧面是一个光滑的非平面面，法线逐顶点插值。
+        bool planar{true};
+    };
+
+    /// @brief 一条边 —— 线框里一段连续的线段。
+    struct Edge {
+        /// 索引到 PolylineData::indices，以线段计。
+        uint32_t firstSegment{0};
+        uint32_t segmentCount{0};
+    };
+
+    std::vector<Face> faces;
+    std::vector<Edge> edges;
+    /// 索引到 PolylineData::positions。只有真正的角点在这儿 —— 圆柱底环上的点
+    /// 是细分产物，不是顶点，把它们算进来只会让端点吸附在圆周上噪成一片。
+    std::vector<uint32_t> vertices;
+
+    bool IsEmpty() const { return faces.empty(); }
+
+    void Clear() {
+        faces.clear();
+        edges.clear();
+        vertices.clear();
+    }
+
+    /// @brief 某个三角形属于哪个面 —— 拾取把三角形命中翻译成 faceIndex 用的。
+    /// @return 面下标；没有任何面包含它时返回 `faces.size()`。
+    uint32_t FaceOfTriangle(uint32_t triangle) const;
+};
 
 } // namespace cadgeom::geom

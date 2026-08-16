@@ -26,10 +26,14 @@ struct PickTarget {
     Mat4d world{Mat4Identity()};
     /// 线框；点图元只有一个顶点、没有线段。可以为空。
     const geom::PolylineData* wire{nullptr};
-    /// 三角网格。M3 里只有导入的网格和实体才有，曲线一律为空。
+    /// 三角网格。只有实体和导入的网格才有，曲线一律为空。
     const geom::MeshData* mesh{nullptr};
+    /// 实体的拓扑，用来把命中的三角形翻译成 `faceIndex`。为空时面拾取只好退回
+    /// 报三角形下标 —— 对一堆没有面可言的三角形来说，那已经是最诚实的答案。
+    const geom::Topology* topology{nullptr};
     /// 该形状的承载平面（圆/圆弧/矩形有，直线和点没有）。命中一条曲线时用它当
-    /// 法线，SetWorkPlaneFromPick 因此在实体做出来之前就能用。
+    /// 法线，所以 SetWorkPlaneFromPick 对草图和实体一样通 —— 一条平面曲线和一个
+    /// 平面面都能说出自己的法线。
     Vec3d planeNormal{0.0, 0.0, 1.0};
     bool hasPlane{false};
 };

@@ -1,6 +1,9 @@
 #include "geom/Tessellate.h"
 
+#include "core/Error.h"
 #include "geom/Curve.h"
+#include "geom/Extrude.h"
+#include "geom/Profile.h"
 
 namespace cadgeom::geom {
 namespace {
@@ -25,6 +28,7 @@ void TessellateCircle(const Plane& plane, double radius, const TessParams& tess,
 bool Tessellate(Shape& shape, const TessParams& tess) {
     shape.mesh.Clear();
     shape.wire.Clear();
+    shape.topology.Clear();
     shape.bounds = AabbEmpty();
     shape.dirty = false;
 
@@ -76,16 +80,35 @@ bool Tessellate(Shape& shape, const TessParams& tess) {
             break;
         }
 
+        case ShapeType::Solid: {
+            // 轮廓每次都重新离散，而不是把上次的点存下来：细分容差一变，圆柱的
+            // 侧面段数就得跟着变，而它必须和同一个圆当曲线画出来时对得上。
+            if (!shape.def.profile) {
+                core::SetError(CgResult::InvalidState,
+                               "Solid: the shape carries no profile definition to sweep");
+                return false;
+            }
+            Profile profile{};
+            if (!BuildProfile(*shape.def.profile, tess, profile)) {
+                return false;
+            }
+            if (!BuildExtrusion(profile, p.extrude.direction, p.extrude.distance, p.extrude.options,
+                                shape.mesh, shape.wire, shape.topology)) {
+                return false;
+            }
+            break;
+        }
+
         case ShapeType::Mesh:
-        case ShapeType::Solid:
-            // Solids arrive with Extrude in M4; imported meshes with the IO
-            // handlers in M5. Both fill `mesh` directly rather than coming
-            // through here, so reaching this point means a shape was created
-            // with a type the kernel does not build yet.
+            // 导入的网格由 M5 的 IO 处理器直接填 `mesh`，不从这儿过。
+            core::SetError(CgResult::NotImplemented,
+                           "Mesh geometry arrives with the IO handlers in milestone M5");
             return false;
 
         case ShapeType::None:
         default:
+            core::SetError(CgResult::InvalidArgument,
+                           "ShapeType::None is not a shape anything can tessellate");
             return false;
     }
 

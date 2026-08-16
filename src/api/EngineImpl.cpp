@@ -7,6 +7,7 @@
 #include "core/Error.h"
 #include "core/Log.h"
 #include "interact/tools/DrawTools.h"
+#include "interact/tools/ExtrudeTool.h"
 #include "interact/tools/TransformTools.h"
 
 #if CADGEOM_HAS_VULKAN
@@ -52,6 +53,7 @@ EngineImpl::EngineImpl(const EngineDesc& desc)
     // through the same RegisterTool path a host would use — and can be replaced
     // by a host that registers its own under the same id.
     interact::RegisterBuiltinTools(tools_, tools_.Settings());
+    interact::RegisterExtrudeTool(tools_, tools_.Settings());
     interact::RegisterTransformTools(tools_, tools_.Settings());
     tools_.Activate(ToolId::Select);
 
@@ -232,12 +234,10 @@ void EngineImpl::UpdateSnapshot() {
         // 自然而然地重建（docs/architecture.md §9，M3「Selection 高亮」）。
         const bool isSelected = selection.Contains(id);
         const bool isHovered = IsValid(hovered) && id == hovered;
-        if (isSelected) {
-            style.color = kSelectedColor;
-            style.lineWidth *= kHighlightWidthScale;
-            style.pointSize *= kHighlightWidthScale;
-        } else if (isHovered) {
-            style.color = kHoveredColor;
+        if (isSelected || isHovered) {
+            style.color = isSelected ? kSelectedColor : kHoveredColor;
+            // 实体的高亮主要靠边看出来：面被光照一染，颜色变化远没有轮廓线明显。
+            style.edgeColor = style.color;
             style.lineWidth *= kHighlightWidthScale;
             style.pointSize *= kHighlightWidthScale;
         }
@@ -257,18 +257,23 @@ void EngineImpl::UpdateSnapshot() {
         const auto curveIndex = static_cast<uint32_t>(snapshot_.curves.size());
         snapshot_.curves.push_back(&shape->wire);
 
+        // 实体的线框是它的特征边，走 EdgePass：贴在自己的表面上、用 edgeColor、
+        // 而且在 RenderMode::Shaded 下整批不画。曲线的线框就是曲线本身，走
+        // LinePass（docs/architecture.md §4.2）。
+        const bool isSolid = !shape->topology.IsEmpty();
         if (shape->wire.SegmentCount() > 0) {
             render::CurveItem item{};
             item.curveIndex = curveIndex;
             item.worldTransform = world;
-            item.color = style.color;
+            item.color = isSolid ? style.edgeColor : style.color;
             item.width = style.lineWidth;
-            item.style = style.lineStyle;
-            snapshot_.curveItems.push_back(item);
+            item.style = isSolid ? LineStyle::Solid : style.lineStyle;
+            (isSolid ? snapshot_.edgeItems : snapshot_.curveItems).push_back(item);
         }
         // 点图元一直要画标记；被选中的曲线额外把顶点显示出来，用户因此看得见
-        // 自己能吸附到哪儿 —— 这也是 M3 的顶点拾取在屏幕上的样子。
-        if (entity->GetShapeType() == ShapeType::Point || isSelected) {
+        // 自己能吸附到哪儿 —— 这也是 M3 的顶点拾取在屏幕上的样子。实体不在此列：
+        // 它的线框上是一圈细分点，标出来只是一片噪声。
+        if (entity->GetShapeType() == ShapeType::Point || (isSelected && !isSolid)) {
             render::PointItem item{};
             item.curveIndex = curveIndex;
             item.worldTransform = world;

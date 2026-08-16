@@ -27,7 +27,11 @@ class SceneImpl;
 /// Creates one entity carrying one kernel shape.
 class CreateShapeCommand final : public ICommand {
 public:
-    CreateShapeCommand(SceneImpl& scene, geom::ShapeDef def, const char* name, EntityId parent);
+    /// @param local 新实体的局部变换。除了拉伸都是单位阵：实体是在轮廓的对象空间
+    ///              里扫掠出来的，所以它得原样接过轮廓的那一份变换，否则轮廓一旦
+    ///              被挪动过，拉出来的实体就会落在别处。
+    CreateShapeCommand(SceneImpl& scene, geom::ShapeDef def, const char* name, EntityId parent,
+                       const Transform& local = Transform{});
 
     void Release() override;
     CgResult Execute(IScene* scene) override;
@@ -48,6 +52,7 @@ private:
     std::string label_;
     std::string entityName_;
     EntityId parent_;
+    Transform local_;
 
     EntityId entity_{kInvalidEntity};
     ShapeId shape_{kInvalidShape};

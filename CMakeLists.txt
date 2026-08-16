@@ -122,9 +122,11 @@ set(CADGEOM_SOURCES
     src/core/ObjectTracker.cpp
     src/core/Png.cpp
     src/geom/Curve.cpp
+    src/geom/Extrude.cpp
     src/geom/Intersect.cpp
     src/geom/Kernel.cpp
     src/geom/MeshData.cpp
+    src/geom/Profile.cpp
     src/geom/Snap.cpp
     src/geom/Tessellate.cpp
     src/scene/Bvh.cpp
@@ -136,6 +138,7 @@ set(CADGEOM_SOURCES
     src/interact/ToolContext.cpp
     src/interact/WorkPlane.cpp
     src/interact/tools/DrawTools.cpp
+    src/interact/tools/ExtrudeTool.cpp
     src/interact/tools/ToolBase.cpp
     src/interact/tools/TransformTools.cpp
     src/api/Commands.cpp
@@ -158,6 +161,7 @@ set(CADGEOM_RENDER_SOURCES
     src/render/Renderer.cpp
     src/render/RenderSystem.cpp
     src/render/Surface.cpp
+    src/render/pass/EdgePass.cpp
     src/render/pass/GridPass.cpp
     src/render/pass/LinePass.cpp
     src/render/pass/MeshPass.cpp

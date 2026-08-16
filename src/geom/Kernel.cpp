@@ -3,6 +3,8 @@
 #include "core/Error.h"
 #include "core/Log.h"
 #include "geom/Curve.h"
+#include "geom/Extrude.h"
+#include "geom/Profile.h"
 #include "geom/Tessellate.h"
 
 #include <unordered_map>
@@ -105,12 +107,10 @@ public:
             return nullptr;
         }
         if (shape->dirty && !Tessellate(*shape, tess_)) {
-            // Tessellate only fails on a definition the validator would have
-            // rejected, so this means the shape carries a type the kernel does
-            // not build yet. Report once and leave the cache empty rather than
-            // retrying every frame.
-            CG_WARN("cannot tessellate a %s yet; it will not be drawn",
-                    TypeName(shape->def.Type()));
+            // 校验器放行的定义细分不出东西，只可能是内核还造不出这个类型。报一次
+            // 就算了，把缓存留空，而不是每帧重试。
+            CG_WARN("cannot tessellate a %s: %s", TypeName(shape->def.Type()),
+                    core::LastErrorMessage());
         }
         return shape;
     }
@@ -246,12 +246,30 @@ CgResult ValidateShapeDef(const ShapeDef& def) {
             return CgResult::Ok;
         }
 
+        case ShapeType::Solid: {
+            if (!def.profile) {
+                return core::SetError(CgResult::InvalidArgument,
+                                      "Solid: no profile definition; a solid is built by Extrude, "
+                                      "not created from parameters alone");
+            }
+            // 真的把轮廓离散一遍来校验，而不是只看类型：多段线共面与否、环有没有
+            // 面积，都只有离散之后才知道，而这些恰恰是最容易出问题的地方。一次拉伸
+            // 只在这里多花一遍离散，换的是「建得出来就一定画得出来」。
+            Profile profile{};
+            if (!BuildProfile(*def.profile, TessParams{}, profile)) {
+                const CgResult recorded = core::LastError();
+                return CgFailed(recorded) ? recorded : CgResult::GeometryError;
+            }
+
+            SweepLoops loops{};
+            return BuildSweepLoops(profile, p.extrude.direction, p.extrude.distance,
+                                   p.extrude.options, loops);
+        }
+
         case ShapeType::Mesh:
-        case ShapeType::Solid:
             return core::SetError(CgResult::NotImplemented,
-                                  "%s geometry is built by Extrude and the IO handlers, which "
-                                  "land in milestones M4 and M5",
-                                  TypeName(p.type));
+                                  "Mesh geometry is built by the IO handlers, which land in "
+                                  "milestone M5");
 
         case ShapeType::None:
         default:

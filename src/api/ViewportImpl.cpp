@@ -390,6 +390,7 @@ bool ViewportImpl::HandleToolKey(const KeyEvent& e) {
         case 'C': id = ToolId::Circle;    break;
         case 'R': id = ToolId::Rectangle; break;
         case 'Y': id = ToolId::Polyline;  break;
+        case 'E': id = ToolId::Extrude;   break;
         case 'M': id = ToolId::Move;      break;
         case 'T': id = ToolId::Rotate;    break;  // R 已经给了矩形，T 取 turn。
         default: return false;
@@ -473,7 +474,12 @@ render::RenderView ViewportImpl::BuildRenderView() const {
 
     view.background = background_;
     view.showGrid = showGrid_;
-    view.wireframe = renderMode_ == RenderMode::Wireframe;
+    // 线框模式下不画表面，只留特征边和曲线 —— CAD 的线框图指的就是这个。着色模式
+    // 反过来，只有面没有边。默认的 ShadedWithEdges 两样都要，也是 M4 的验收样子：
+    // 带轮廓黑边的实体。RenderMode::HiddenLine 暂时按 ShadedWithEdges 处理，它要的
+    // 「被遮挡的边画成虚线」得等 M6 的第二遍深度。
+    view.drawSurfaces = renderMode_ != RenderMode::Wireframe;
+    view.drawEdges = renderMode_ != RenderMode::Shaded;
     return view;
 }
 

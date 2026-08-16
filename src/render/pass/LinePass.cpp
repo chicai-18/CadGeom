@@ -23,30 +23,6 @@ const VkVertexInputAttributeDescription kAttributes[2] = {
 /// enough to be invisible at any zoom the camera allows.
 constexpr float kSceneDepthBias = 2.0e-5f;
 
-void FillPush(CurvePushConstants& push, const Mat4d& model, const Vec3d& cameraOrigin,
-              const Color& color, float width, LineStyle style, float depthBias) {
-    // The one place world coordinates become camera-relative. Subtracting in
-    // double and narrowing afterwards is what keeps a model far from the origin
-    // from shimmering (§4.3).
-    Mat4d relative = model;
-    relative.m[12] -= cameraOrigin.x;
-    relative.m[13] -= cameraOrigin.y;
-    relative.m[14] -= cameraOrigin.z;
-    for (int i = 0; i < 16; ++i) {
-        push.model[i] = static_cast<float>(relative.m[i]);
-    }
-
-    push.color[0] = color.r;
-    push.color[1] = color.g;
-    push.color[2] = color.b;
-    push.color[3] = color.a;
-
-    push.params[0] = width;
-    push.params[1] = static_cast<float>(static_cast<int32_t>(style));
-    push.params[2] = depthBias;
-    push.params[3] = 0.0f;
-}
-
 } // namespace
 
 CgResult LinePass::Initialize(vk::Context& ctx, VkPipelineLayout layout) {
@@ -120,8 +96,8 @@ void LinePass::Record(VkCommandBuffer cmd, VkPipelineLayout layout, const GpuSce
         }
 
         CurvePushConstants push{};
-        FillPush(push, item.worldTransform, view.cameraOrigin, item.color, item.width, item.style,
-                 kSceneDepthBias);
+        FillCurvePushConstants(item.worldTransform, view.cameraOrigin, item.color, item.width,
+                               item.style, kSceneDepthBias, push);
         vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(push), &push);
         vkCmdDraw(cmd, 6, range->instanceCount, 0, range->firstInstance);
@@ -146,7 +122,8 @@ void LinePass::RecordOverlay(VkCommandBuffer cmd, VkPipelineLayout layout, VkBuf
         // Already camera-relative: the overlay is rebuilt every frame, so the
         // subtraction happened on the CPU when the buffer was filled.
         CurvePushConstants push{};
-        FillPush(push, Mat4Identity(), Vec3d{0.0, 0.0, 0.0}, run.color, run.size, run.style, 0.0f);
+        FillCurvePushConstants(Mat4Identity(), Vec3d{0.0, 0.0, 0.0}, run.color, run.size, run.style,
+                               0.0f, push);
         vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, sizeof(push), &push);
         vkCmdDraw(cmd, 6, run.instanceCount, 0, run.firstInstance);

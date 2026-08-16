@@ -347,15 +347,4 @@ TEST_CASE("tessellation tolerance controls how closely a curve is followed",
     CHECK(fineDiagonal == Approx(240.85).margin(0.2));
 }
 
-TEST_CASE("extrude reports the milestone that brings it", "[geom][pending]") {
-    cgtest::EngineFixture fixture;
-    IGeometryBuilder& builder = *fixture.Scene().GetGeometryBuilder();
-
-    const EntityId profile = builder.MakeCircle(kXY, 10.0);
-    REQUIRE(IsValid(profile));
-
-    ExtrudeOptions options{};
-    CHECK_FALSE(IsValid(builder.Extrude(profile, Vec3d{0, 0, 1}, 25.0, options)));
-    CHECK(fixture.Engine().GetLastError() == CgResult::NotImplemented);
-    CHECK(std::string(fixture.Engine().GetLastErrorMessage()).find("M4") != std::string::npos);
-}
+// 拉伸本身在 tests/test_extrude.cpp 里。

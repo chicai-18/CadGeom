@@ -38,12 +38,16 @@ CgResult ReportedError(CgResult fallback) {
 // ---------------------------------------------------------------------------
 
 CreateShapeCommand::CreateShapeCommand(SceneImpl& scene, geom::ShapeDef def, const char* name,
-                                       EntityId parent)
+                                       EntityId parent, const Transform& local)
     : scene_(scene),
       def_(std::move(def)),
-      label_(std::string("Create ") + TypeName(def_.Type())),
+      // 撤销菜单里读的是动作，不是类型：一个实体是「拉伸」出来的，说「创建实体」
+      // 等于把用户刚做的那件事换了个名字。
+      label_(def_.Type() == ShapeType::Solid ? std::string("Extrude")
+                                             : std::string("Create ") + TypeName(def_.Type())),
       entityName_(name ? name : TypeName(def_.Type())),
-      parent_(parent) {}
+      parent_(parent),
+      local_(local) {}
 
 CreateShapeCommand::~CreateShapeCommand() = default;
 
@@ -75,6 +79,7 @@ CgResult CreateShapeCommand::Execute(IScene*) {
     entity_ = created;
 
     EntityImpl* entity = scene_.FindEntity(entity_);
+    entity->SetLocalTransform(local_);
     entity->SetShape(shape_, def_.Type());
     applied_ = true;
     return CgResult::Ok;

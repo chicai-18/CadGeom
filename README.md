@@ -6,14 +6,15 @@ standalone.
 
 Design document: [`docs/architecture.md`](docs/architecture.md).
 
-> **Status: milestone M3 (selection and manipulation).** The public API is
+> **Status: milestone M4 (extrude into solids).** The public API is
 > complete and frozen. Working: the Vulkan renderer, the geometry kernel,
 > points/lines/arcs/circles/rectangles/polylines, screen-space line rendering with
 > dash patterns, the work plane, the interactive tools, ray picking through a BVH
 > with vertex/edge/face priority, geometry snapping, selection highlighting,
-> translate/rotate gizmos and undo/redo. Not built yet: extrude and solids (M4),
-> OBJ/glTF (M5), MSAA and UI panels (M6). Calls into those return
-> `CgResult::NotImplemented` with a message naming the milestone that brings them.
+> translate/rotate gizmos, undo/redo, and extrusion into solids with topology,
+> per-face picking and feature-edge rendering. Not built yet: OBJ/glTF (M5), MSAA
+> and UI panels (M6). Calls into those return `CgResult::NotImplemented` with a
+> message naming the milestone that brings them.
 
 ## Building
 

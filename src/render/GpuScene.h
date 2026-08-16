@@ -63,6 +63,10 @@ struct SceneSnapshot {
 
     std::vector<DrawItem> items;
     std::vector<CurveItem> curveItems;
+    /// 实体的特征边。和 `curveItems` 同样是 CurveItem、同样指向 `curves`，分开一份
+    /// 是因为它们的画法不同：走 EdgePass，用 EntityStyle::edgeColor，不写深度，而且
+    /// RenderMode::Shaded 下整批不画。
+    std::vector<CurveItem> edgeItems;
     std::vector<PointItem> pointItems;
 
     void Clear() {
@@ -70,6 +74,7 @@ struct SceneSnapshot {
         curves.clear();
         items.clear();
         curveItems.clear();
+        edgeItems.clear();
         pointItems.clear();
     }
 };

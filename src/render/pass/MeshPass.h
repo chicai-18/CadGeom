@@ -17,15 +17,13 @@ public:
     void Shutdown(vk::Context& ctx);
 
     /// Draws every item in `snapshot` whose mesh made it onto the GPU. The
-    /// caller has already bound the frame's descriptor set.
+    /// caller has already bound the frame's descriptor set and is responsible
+    /// for skipping this in RenderMode::Wireframe.
     void Record(VkCommandBuffer cmd, VkPipelineLayout layout, const GpuScene& gpuScene,
                 const SceneSnapshot& snapshot, const RenderView& view) const;
 
 private:
     VkPipeline fill_{VK_NULL_HANDLE};
-    /// Null when the device lacks fillModeNonSolid; RenderMode::Wireframe then
-    /// falls back to shaded until M4's EdgePass makes it properly.
-    VkPipeline wireframe_{VK_NULL_HANDLE};
 };
 
 } // namespace cadgeom::render

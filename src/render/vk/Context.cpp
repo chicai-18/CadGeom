@@ -327,10 +327,6 @@ CgResult Context::SelectPhysicalDevice(const Config& config) {
     vkGetPhysicalDeviceProperties(physicalDevice_, &props);
     deviceName_ = props.deviceName;
 
-    VkPhysicalDeviceFeatures features{};
-    vkGetPhysicalDeviceFeatures(physicalDevice_, &features);
-    fillModeNonSolid_ = features.fillModeNonSolid == VK_TRUE;
-
     return CgResult::Ok;
 }
 
@@ -367,8 +363,9 @@ CgResult Context::CreateDevice(const Config& config) {
 
     VkPhysicalDeviceFeatures2 features2{};
     features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    // 没有请求任何 VkPhysicalDeviceFeatures：屏幕空间四边形把线条和特征边全包了，
+    // VK_POLYGON_MODE_LINE 需要的 fillModeNonSolid 因此一个用户都没有。
     features2.pNext = &features13;
-    features2.features.fillModeNonSolid = fillModeNonSolid_ ? VK_TRUE : VK_FALSE;
 
     VkDeviceCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;

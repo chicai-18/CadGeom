@@ -50,10 +50,6 @@ public:
     /// UTF-8, never null — a placeholder before Initialize().
     const char* DeviceName() const { return deviceName_.c_str(); }
 
-    /// True when the device can rasterise VK_POLYGON_MODE_LINE, which is what
-    /// RenderMode::Wireframe rides on until M4 brings the real EdgePass.
-    bool SupportsFillModeNonSolid() const { return fillModeNonSolid_; }
-
     /// Records and runs a one-shot command buffer, waiting for it to finish.
     /// Uploads and screenshot readbacks use it; nothing on the frame path does.
     CgResult ImmediateSubmit(const std::function<void(VkCommandBuffer)>& record);
@@ -81,7 +77,6 @@ private:
     VkFence immediateFence_{VK_NULL_HANDLE};
 
     std::string deviceName_{"<no device>"};
-    bool fillModeNonSolid_{false};
     bool validationEnabled_{false};
 };
 

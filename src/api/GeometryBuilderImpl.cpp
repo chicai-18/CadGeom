@@ -3,9 +3,12 @@
 #include "api/Commands.h"
 #include "api/SceneImpl.h"
 #include "core/Error.h"
+#include "core/Math.h"
 #include "geom/Kernel.h"
 
 #include <stdio.h>
+
+#include <memory>
 
 namespace cadgeom::api {
 namespace {
@@ -38,7 +41,7 @@ void GeometryBuilderImpl::MakeName(ShapeType type, char* buffer, size_t bufferSi
     snprintf(buffer, bufferSize, "%s %u", TypeName(type), n);
 }
 
-EntityId GeometryBuilderImpl::Build(geom::ShapeDef def) {
+EntityId GeometryBuilderImpl::Build(geom::ShapeDef def, EntityId parent, const Transform& local) {
     // Rejected before a command is built around it, so a bad call costs an
     // allocation of nothing and the host gets the specific reason.
     const CgResult valid = geom::ValidateShapeDef(def);
@@ -49,7 +52,7 @@ EntityId GeometryBuilderImpl::Build(geom::ShapeDef def) {
     char name[64];
     MakeName(def.Type(), name, sizeof(name));
 
-    auto* command = new CreateShapeCommand(scene_, std::move(def), name, kInvalidEntity);
+    auto* command = new CreateShapeCommand(scene_, std::move(def), name, parent, local);
     // Push executes, and on failure releases: reading `command` afterwards is
     // only safe on the success path, where the stack now owns it.
     if (CgFailed(scene_.GetCommandStack()->Push(command))) {
@@ -118,14 +121,45 @@ EntityId GeometryBuilderImpl::MakePolyline(CgSpan<const Vec3d> points, bool clos
 
 EntityId GeometryBuilderImpl::Extrude(EntityId profile, const Vec3d& direction, double distance,
                                       const ExtrudeOptions& options) {
-    (void)profile;
-    (void)direction;
-    (void)distance;
-    (void)options;
-    core::SetError(CgResult::NotImplemented,
-                   "Extrude needs profile triangulation and solid topology, which land in "
-                   "milestone M4");
-    return kInvalidEntity;
+    const EntityImpl* source = scene_.FindEntity(profile);
+    if (!source) {
+        core::SetError(CgResult::InvalidHandle, "Extrude: unknown profile entity %llu",
+                       static_cast<unsigned long long>(profile.value));
+        return kInvalidEntity;
+    }
+    const ShapeId profileShape = source->GetShape();
+    geom::ShapeDef profileDef{};
+    if (!IsValid(profileShape) || !scene_.Kernel().GetDef(profileShape, profileDef)) {
+        core::SetError(CgResult::InvalidState,
+                       "Extrude: entity %llu carries no parametric shape to sweep",
+                       static_cast<unsigned long long>(profile.value));
+        return kInvalidEntity;
+    }
+
+    // 方向按世界空间收，因为宿主说的「往上拉」指的是世界的上；扫掠却发生在轮廓
+    // 自己的对象空间里，所以在这儿折回去一次。轮廓的变换是单位阵时（画出来的图元
+    // 都是），这一步什么也不改变。
+    Mat4d world{};
+    source->GetWorldTransform(world);
+    const Vec3d localDirection = Normalized(TransformDirection(Inverse(world), direction));
+    if (LengthSq(localDirection) < kEpsilon) {
+        core::SetError(CgResult::InvalidArgument, "Extrude: direction is zero-length");
+        return kInvalidEntity;
+    }
+
+    geom::ShapeDef def{};
+    def.params.type = ShapeType::Solid;
+    def.params.extrude.profile = profileShape;
+    def.params.extrude.direction = localDirection;
+    def.params.extrude.distance = distance;
+    def.params.extrude.options = options;
+    // 一份拷贝，不是一个引用：轮廓那个实体可以随时被删掉，而实体的参数化定义必须
+    // 自足（geom/Shape.h 的 ShapeDef::profile）。
+    def.profile = std::make_shared<const geom::ShapeDef>(std::move(profileDef));
+
+    Transform local{};
+    source->GetLocalTransform(local);
+    return Build(std::move(def), source->GetParent(), local);
 }
 
 bool GeometryBuilderImpl::GetParams(EntityId entity, ShapeParams& out) const {
@@ -184,6 +218,11 @@ CgResult GeometryBuilderImpl::SetParams(EntityId entity, const ShapeParams& para
 
     geom::ShapeDef next = previous;
     next.params = params;
+    if (params.type == ShapeType::Solid) {
+        // 高度、方向、拔模都可以改，被扫掠的那个轮廓不行 —— 实体带的是轮廓的一份
+        // 拷贝，换掉这个 id 只会让它和自己的几何对不上号。想换轮廓就重新拉伸一次。
+        next.params.extrude.profile = previous.params.extrude.profile;
+    }
     const CgResult valid = geom::ValidateShapeDef(next);
     if (CgFailed(valid)) {
         return valid;

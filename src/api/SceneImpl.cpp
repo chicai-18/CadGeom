@@ -345,6 +345,7 @@ bool SceneImpl::GetPickTarget(EntityId entity, interact::PickTarget& out) const 
     // 任何线段，而它恰恰是最该被顶点拾取选中的东西。
     out.wire = shape->wire.positions.empty() ? nullptr : &shape->wire;
     out.mesh = shape->mesh.IsEmpty() ? nullptr : &shape->mesh;
+    out.topology = shape->topology.IsEmpty() ? nullptr : &shape->topology;
 
     const ShapeParams& params = shape->def.params;
     switch (params.type) {
@@ -415,7 +416,7 @@ void SceneImpl::CollectSnapCandidates(const Vec3d& center, double radius, uint32
         entity->GetWorldTransform(world);
 
         points.clear();
-        geom::CollectSnapPoints(shape->def, world, mask, points);
+        geom::CollectSnapPoints(*shape, world, mask, points);
         for (const geom::SnapPoint& point : points) {
             if (Distance(point.point, center) <= radius) {
                 out.push_back(interact::SnapCandidate{point.type, point.point, id});

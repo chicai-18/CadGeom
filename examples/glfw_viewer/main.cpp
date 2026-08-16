@@ -1,4 +1,4 @@
-// CadGeom demo host — milestones M0 through M3.
+// CadGeom demo host — milestones M0 through M4.
 //
 // Two phases, deliberately separate:
 //
@@ -8,8 +8,9 @@
 //      heap checkpoint, so it has to stay free of anything that allocates behind
 //      the engine's back.
 //   2. A viewport: a window, a grid, an orbit camera, a drawing made of points,
-//      lines, circles and rectangles, the tools that create them, and the
-//      select/move/rotate gestures that edit them. Run with --headless it
+//      lines, circles and rectangles, the tools that create them, the
+//      select/move/rotate gestures that edit them, and the extrusions that turn
+//      two of those profiles into solids. Run with --headless it
 //      renders off-screen and writes a PNG instead, which is how the renderer
 //      gets verified on a machine with no display — and it drives the tools
 //      through synthetic mouse events, so interactive creation and the gizmo
@@ -275,6 +276,47 @@ bool RunApiWalk(cadgeom::ICadEngine& engine) {
     ok &= Check(CgSucceeded(commands->Undo()) && scene->Exists(circle),
                 "and deleting is undoable too");
 
+    Section("Extrude");
+    // 圆 → 圆柱。拉伸出来的是一个参数化实体，改高度是重新扫掠而不是编辑三角形，
+    // 拓扑也一并生成，面拾取因此立刻可用（§3.3）。
+    ExtrudeOptions extrudeOptions{};
+    const EntityId cylinder = builder->Extrude(circle, Vec3d{0, 0, 1}, 30.0, extrudeOptions);
+    ok &= Check(IsValid(cylinder) && scene->GetEntity(cylinder)->GetShapeType() == ShapeType::Solid,
+                "a circle sweeps into a solid");
+    ok &= Check(scene->GetEntity(cylinder)->GetWorldBounds(bounds) &&
+                    std::abs(bounds.max.z - 30.0) < 1e-9,
+                "the solid is as tall as it was asked to be");
+
+    ShapeParams solidParams{};
+    ok &= Check(builder->GetParams(cylinder, solidParams) &&
+                    solidParams.type == ShapeType::Solid &&
+                    std::abs(solidParams.extrude.distance - 30.0) < 1e-9,
+                "and it reads back as a parametric extrusion");
+    solidParams.extrude.distance = 12.0;
+    ok &= Check(CgSucceeded(builder->SetParams(cylinder, solidParams)) &&
+                    scene->GetEntity(cylinder)->GetWorldBounds(bounds) &&
+                    std::abs(bounds.max.z - 12.0) < 1e-9,
+                "changing the height re-sweeps it");
+
+    // 面拾取报的是**面**下标，不是三角形下标 —— 「点某个面 → 设为工作平面 → 在上面
+    // 画圆 → 拉伸」这条工作流靠的就是它（§6.3）。
+    PickResult faceHit{};
+    ok &= Check(scene->Raycast(Ray{Vec3d{0, 0, 100}, Vec3d{0, 0, -1}}, PickFilter_Face, faceHit) &&
+                    faceHit.entity == cylinder && faceHit.kind == PickKind::Face,
+                "a ray onto the top face reports a face hit");
+    ok &= Check(std::abs(faceHit.normal.z - 1.0) < 1e-9 && std::abs(faceHit.point.z - 12.0) < 1e-9,
+                "with the face's own normal and the exact hit point");
+
+    ok &= Check(CgSucceeded(commands->Undo()) && CgSucceeded(commands->Undo()) &&
+                    !scene->Exists(cylinder),
+                "the height edit and the extrude undo one step each");
+
+    const EntityId openLine = builder->MakeLine(Vec3d{0, 0, 0}, Vec3d{10, 0, 0});
+    ok &= Check(!IsValid(builder->Extrude(openLine, Vec3d{0, 0, 1}, 5.0, extrudeOptions)) &&
+                    CgFailed(engine.GetLastError()),
+                "a shape that encloses no area is refused with a reason");
+    engine.ClearLastError();
+
     Section("Picking");
     // 一条垂直打向上面那个 25 mm 圆的射线。拾取是 CPU 对着 BVH 做的，全程不需要
     // 任何设备（§6.3）。
@@ -304,18 +346,13 @@ bool RunApiWalk(cadgeom::ICadEngine& engine) {
     pickSelection->Clear();
 
     Section("Not built yet");
-    ExtrudeOptions extrudeOptions{};
-    if (!IsValid(builder->Extrude(circle, Vec3d{0, 0, 1}, 30.0, extrudeOptions))) {
-        Pending("Extrude", engine);
-    }
-
     ExportOptions exportOptions{};
     if (CgFailed(engine.GetIoRegistry()->Export("out.glb", exportOptions, nullptr, nullptr))) {
         Pending("Export", engine);
     }
 
-    if (CgFailed(engine.GetToolManager()->Activate(ToolId::Extrude))) {
-        Pending("Activate(Extrude)", engine);
+    if (CgFailed(engine.GetToolManager()->Activate(ToolId::Measure))) {
+        Pending("Activate(Measure)", engine);
     }
 
     return ok;
@@ -330,6 +367,7 @@ void PrintCameraHelp() {
                 "  wheel        zoom at cursor  double middle-click        zoom to fit\n"
                 "  1..7         standard views  F fit   P ortho/persp   G grid   W wireframe\n"
                 "  V select  X point  L line  C circle  R rectangle  Y polyline  Esc cancel\n"
+                "  E extrude — click a closed profile, then drag along its normal\n"
                 "  M move    T rotate  — click an object, then drag an axis, plane or ring\n"
                 "  ctrl+click / shift+click  add to the selection    Del  delete it\n"
                 "  Ctrl+Z undo   Ctrl+Y (or Ctrl+Shift+Z) redo\n");
@@ -434,6 +472,7 @@ bool DriveTools(cadgeom::ICadEngine& engine, cadgeom::IViewport& viewport) {
         return viewport.OnMouseEvent(e);
     };
 
+    ISelection& selection = *scene.GetSelection();
     const uint32_t before = scene.GetEntityCount();
 
     // Click, then click: the habit of every CAD package.
@@ -500,12 +539,89 @@ bool DriveTools(cadgeom::ICadEngine& engine, cadgeom::IViewport& viewport) {
         }
     }
 
+    // -- M4：把画出来的矩形拉成一个实体 --------------------------------------
+    //
+    // 先转到轴测视角。高度是把鼠标射线投到扫掠轴上求出来的，而在顶视图里那根轴正
+    // 对着观察者 —— 射线和它平行，无解。这不是引擎的毛病，是拉伸这件事本身在那个
+    // 视角下没有答案，任何 CAD 里都一样。
+    camera.SetStandardView(StandardView::Isometric);
+    camera.ZoomToFit(nullptr, 1.25);
+
+    // 轮廓走选择集而不是靠点：真人点下去之前有预高亮告诉他会选中什么，脚本没有，
+    // 而一个像素在任意视角下命中哪条曲线是说不准的。工具在 OnActivate 时会把已经
+    // 选好的东西接过来，「先选中，再按 E」本来也是 CAD 里更常见的那一半习惯。
+    const EntityId rectangle = scene.GetEntityAt(before + 1);
+    selection.Set(CgSpan<const EntityId>{&rectangle, 1});
+    ok &= Check(CgSucceeded(tools.Activate(ToolId::Extrude)), "activated the extrude tool");
+
+    // 第一次移动定下高度的零点，第二次给出高度。两个点都落在扫掠轴上，所以正交和
+    // 透视下算出来的是同一个数。
+    const Vec3d rectCentre{-35.0, 57.5, 0.0};
+    const Vec3d rectTop{rectCentre.x, rectCentre.y, 20.0};
+    send(rectCentre, MouseAction::Move);
+    send(rectTop, MouseAction::Move);
+    ok &= Check(send(rectTop, MouseAction::Down), "the tool took the height");
+
+    ok &= Check(scene.GetEntityCount() == before + 3, "dragging a height produced a solid");
+    const EntityId solid = scene.GetEntityAt(scene.GetEntityCount() - 1);
+    ok &= Check(scene.GetEntity(solid)->GetShapeType() == ShapeType::Solid,
+                "and what it produced is a parametric solid");
+
+    Aabb solidBounds{};
+    ok &= Check(scene.GetEntity(solid)->GetWorldBounds(solidBounds) && solidBounds.max.z > 1.0,
+                "the solid stands up off the work plane");
+    ok &= Check(std::string(scene.GetCommandStack()->PeekUndoName()) == "Extrude",
+                "the whole extrusion is one undo step");
+
+    // 面拾取：实体做出来之后，「点某个面 → 设为工作平面」这条路才真的通了（§6.3）。
+    Vec2d topPixel{};
+    if (camera.WorldToScreen(Vec3d{(solidBounds.min.x + solidBounds.max.x) * 0.5,
+                                   (solidBounds.min.y + solidBounds.max.y) * 0.5,
+                                   solidBounds.max.z},
+                             topPixel)) {
+        PickResult facePick{};
+        ok &= Check(viewport.Pick(topPixel.x, topPixel.y, PickFilter_Face, facePick) &&
+                        facePick.entity == solid && facePick.kind == PickKind::Face,
+                    "clicking the top face picks a face, not a triangle");
+        ok &= Check(CgSucceeded(viewport.SetWorkPlaneFromPick(facePick)),
+                    "and that face becomes the work plane");
+        WorkPlane onFace{};
+        viewport.GetWorkPlane(onFace);
+        ok &= Check(std::abs(onFace.normal.z - 1.0) < 1e-6,
+                    "the work plane took the face's own normal");
+    }
+
+    // 工作平面挪到了实体顶面上，后面的绘制都会落在那儿；截图要的是原来那张图，
+    // 所以放回 XY 平面。
+    viewport.SetWorkPlane(WorkPlane{Vec3d{0, 0, 0}, Vec3d{0, 0, 1}, Vec3d{1, 0, 0},
+                                    Vec3d{0, 1, 0}});
+
+    // 同一个工具，换一种轮廓：中间那个 22 mm 的孔拉成一个凸台。圆的侧面是**一个**
+    // 光滑面而不是六十四个四边形，所以圆柱身上不该有一根竖线 —— 这正是 M4 里
+    // 「圆→圆柱、矩形→立方体」两条验收标准的另一半。
+    const EntityId bore = scene.GetEntityAt(1);  // BuildDemoDrawing 里的第二个图元。
+    selection.Set(CgSpan<const EntityId>{&bore, 1});
+    tools.Activate(ToolId::Select);
+    tools.Activate(ToolId::Extrude);
+    send(Vec3d{0, 0, 0}, MouseAction::Move);
+    send(Vec3d{0, 0, 18}, MouseAction::Move);
+    send(Vec3d{0, 0, 18}, MouseAction::Down);
+
+    ok &= Check(scene.GetEntityCount() == before + 4, "a circle extruded into a cylinder");
+    const EntityId boss = scene.GetEntityAt(scene.GetEntityCount() - 1);
+    ok &= Check(scene.GetEntity(boss)->GetShapeType() == ShapeType::Solid,
+                "and it is a solid too");
+    Aabb bossBounds{};
+    ok &= Check(scene.GetEntity(boss)->GetWorldBounds(bossBounds) &&
+                    std::abs(bossBounds.max.z - 18.0) < 1e-6,
+                "to exactly the height the cursor was at");
+
     // 有意停在半途：这个圆永远不会变成形状。预览几何既不进场景也不进撤销栈（§6.2）。
     ok &= Check(CgSucceeded(tools.Activate(ToolId::Circle)), "activated the circle tool");
     send(Vec3d{40, 55, 0}, MouseAction::Move);
     send(Vec3d{40, 55, 0}, MouseAction::Down);
     send(Vec3d{62, 55, 0}, MouseAction::Move);
-    ok &= Check(scene.GetEntityCount() == before + 2,
+    ok &= Check(scene.GetEntityCount() == before + 4,
                 "a rubber-band preview stays out of the scene");
 
     // -- M3：先选中，再拖 Gizmo ---------------------------------------------
@@ -513,7 +629,6 @@ bool DriveTools(cadgeom::ICadEngine& engine, cadgeom::IViewport& viewport) {
     // Gizmo 的手柄是按固定像素尺寸摆在屏幕空间里的，所以宿主要瞄准一个手柄，办法
     // 是把它的原点投到屏幕上、再沿投影后的轴走几个像素。这不需要知道引擎内部的手柄
     // 尺寸 —— 真实用户的鼠标掌握的信息也就这么多。
-    ISelection& selection = *scene.GetSelection();
     ok &= Check(CgSucceeded(tools.Activate(ToolId::Select)), "activated the select tool");
 
     // 点在上面那条线身上。
@@ -595,7 +710,7 @@ bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
     desc.surface.kind = options.headless ? SurfaceKind::Headless : SurfaceKind::Glfw;
     desc.surface.width = options.width;
     desc.surface.height = options.height;
-    desc.surface.title = "CadGeom — M3";
+    desc.surface.title = "CadGeom — M4";
     desc.projection =
         options.perspective ? ProjectionMode::Perspective : ProjectionMode::Orthographic;
     // Linear light: the renderer composes in a float target and the swapchain

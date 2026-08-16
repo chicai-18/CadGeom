@@ -415,12 +415,17 @@ void Renderer::RecordFrame(VkCommandBuffer cmd, const RenderView& view,
 
     // Grid first: it is the only opaque-ish surface that blends, so drawing it
     // before the solids lets the depth test resolve the rest normally. Then
-    // solids, then wires and points on top of them, then the overlay, which is
-    // not depth tested at all.
+    // solids, then the feature edges that sit on them, then wires and points,
+    // then the overlay, which is not depth tested at all.
     if (view.showGrid) {
         system_->Grid().Record(cmd);
     }
-    system_->Mesh().Record(cmd, layout, system_->Geometry(), snapshot, view);
+    if (view.drawSurfaces) {
+        system_->Mesh().Record(cmd, layout, system_->Geometry(), snapshot, view);
+    }
+    if (view.drawEdges) {
+        system_->Edges().Record(cmd, layout, system_->Geometry(), snapshot, view);
+    }
     system_->Lines().Record(cmd, layout, system_->Geometry(), snapshot, view);
     system_->Points().Record(cmd, layout, system_->Geometry(), snapshot, view);
 

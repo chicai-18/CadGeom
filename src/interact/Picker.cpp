@@ -102,14 +102,30 @@ bool Raycast(const scene::Bvh& bvh, const IPickTargetSource& source, const Ray& 
                 const Vec3d c =
                     TransformPoint(target.world, target.mesh->vertices[indices[i + 2]].position);
                 double t = 0.0;
-                if (geom::RayTriangle(ray, a, b, c, t) && face.Better(t)) {
-                    face = Candidate{true,
-                                     t,
-                                     item.entity,
-                                     static_cast<uint32_t>(i / 3),
-                                     ray.origin + ray.dir * t,
-                                     Normalized(Cross(b - a, c - a))};
+                if (!geom::RayTriangle(ray, a, b, c, t) || !face.Better(t)) {
+                    continue;
                 }
+
+                // 报的是**面**下标而不是三角形下标：「点某个面 → 设为工作平面 →
+                // 在上面画圆 → 拉伸」这条工作流里，用户点的是一个面，圆柱侧面是
+                // 一个面而不是六十四个（docs/architecture.md §6.3）。
+                const auto triangle = static_cast<uint32_t>(i / 3);
+                uint32_t subIndex = triangle;
+                Vec3d normal = Normalized(Cross(b - a, c - a));
+                if (target.topology && !target.topology->IsEmpty()) {
+                    const uint32_t faceIndex = target.topology->FaceOfTriangle(triangle);
+                    if (faceIndex < target.topology->faces.size()) {
+                        subIndex = faceIndex;
+                        const geom::Topology::Face& hitFace = target.topology->faces[faceIndex];
+                        // 平面面用它自己的法线，不用三角形算出来的：两者本该相等，
+                        // 而工作平面要的是精确的那一个。曲面上没有这种东西，就还
+                        // 用三角形的。
+                        if (hitFace.planar) {
+                            normal = WorldNormal(target.world, hitFace.normal);
+                        }
+                    }
+                }
+                face = Candidate{true, t, item.entity, subIndex, ray.origin + ray.dir * t, normal};
             }
         }
     });

@@ -62,8 +62,9 @@ void NearSegments(const PolylineData& wire, const Mat4d& world, const Vec3d& cen
 
 } // namespace
 
-void CollectSnapPoints(const ShapeDef& def, const Mat4d& world, uint32_t mask,
+void CollectSnapPoints(const Shape& shape, const Mat4d& world, uint32_t mask,
                        std::vector<SnapPoint>& out) {
+    const ShapeDef& def = shape.def;
     const ShapeParams& p = def.params;
     switch (p.type) {
         case ShapeType::Point:
@@ -127,12 +128,34 @@ void CollectSnapPoints(const ShapeDef& def, const Mat4d& world, uint32_t mask,
             break;
         }
 
+        case ShapeType::Solid: {
+            const Topology& topo = shape.topology;
+            for (const uint32_t index : topo.vertices) {
+                if (index < shape.wire.positions.size()) {
+                    AddPoint(out, mask, Snap_Endpoint, world, shape.wire.positions[index]);
+                }
+            }
+            // 只有单段的边才取中点：一条竖直棱的中点是零件上一个真的位置，而底环
+            // 的「中点」不过是六十四段里某一段的一半，吸上去毫无意义。
+            for (const Topology::Edge& edge : topo.edges) {
+                if (edge.segmentCount != 1) {
+                    continue;
+                }
+                const uint32_t base = edge.firstSegment * 2;
+                if (base + 1 >= shape.wire.indices.size()) {
+                    continue;
+                }
+                const Vec3d& a = shape.wire.positions[shape.wire.indices[base]];
+                const Vec3d& b = shape.wire.positions[shape.wire.indices[base + 1]];
+                AddPoint(out, mask, Snap_Midpoint, world, (a + b) * 0.5);
+            }
+            break;
+        }
+
         case ShapeType::Mesh:
-        case ShapeType::Solid:
         case ShapeType::None:
         default:
-            // 导入网格没有参数化定义可谈；实体的特征点要等 M4 的拓扑做出来，
-            // 那时端点来自 Topology.verts 而不是这里。
+            // 导入网格没有参数化定义可谈，特征点得等 M5 从拓扑重建出来。
             break;
     }
 }

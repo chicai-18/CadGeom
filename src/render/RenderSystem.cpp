@@ -38,6 +38,11 @@ CgResult RenderSystem::Initialize(const char* applicationName, bool enableValida
         Shutdown();
         return r;
     }
+    r = edges_.Initialize(context_, pipelineLayout_);
+    if (CgFailed(r)) {
+        Shutdown();
+        return r;
+    }
     r = lines_.Initialize(context_, pipelineLayout_);
     if (CgFailed(r)) {
         Shutdown();
@@ -107,6 +112,7 @@ void RenderSystem::Shutdown() {
     geometry_.Destroy(context_);
     points_.Shutdown(context_);
     lines_.Shutdown(context_);
+    edges_.Shutdown(context_);
     mesh_.Shutdown(context_);
     grid_.Shutdown(context_);
 

@@ -10,6 +10,7 @@ add_executable(cadgeom_tests
     test_math.cpp
     test_scene.cpp
     test_geometry.cpp
+    test_extrude.cpp
     test_picking.cpp
     test_commands.cpp
     test_io_registry.cpp)

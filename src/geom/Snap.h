@@ -28,13 +28,16 @@ struct SnapPoint {
 };
 
 /// @brief 收集一个形状的特征点，按 `mask` 过滤，追加到 `out`。
-/// @param def   参数化定义 —— 特征点从它算，不从网格缓存里找。
+/// @param shape 已细分的形状。曲线的特征点从 `def` 算，实体的从 `topology` 取。
 /// @param world 该形状所属实体的世界变换。
 /// @param mask  哪些 SnapType 是打开的；Snap_Grid / Snap_Intersection 在这里
 ///              没有意义，会被忽略。
 /// @note 多段线的顶点走 Snap_Endpoint、每段中点走 Snap_Midpoint；它没有圆心，
 ///       所以不产生 Snap_Center。
-void CollectSnapPoints(const ShapeDef& def, const Mat4d& world, uint32_t mask,
+/// @note 实体是上面那条「从参数算」的唯一例外，而且不是例外：拉伸的角点没有别的
+///       解析形式可言，`topology.vertices` 就是它的参数化定义在细分后的落点，本身
+///       只收真正的棱角 —— 圆柱底环上那一圈细分点不在里面。
+void CollectSnapPoints(const Shape& shape, const Mat4d& world, uint32_t mask,
                        std::vector<SnapPoint>& out);
 
 /// @brief 两条离散曲线在 `center` 附近 `radius` 内的交点。

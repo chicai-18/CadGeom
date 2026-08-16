@@ -85,10 +85,26 @@ struct RenderView {
 
     Color background{0.16f, 0.17f, 0.19f, 1.0f};
     bool showGrid{true};
-    bool wireframe{false};
+    /// 画不画实体表面。RenderMode::Wireframe 关掉它，只留特征边和曲线 —— CAD 的
+    /// 线框图指的正是这个，而不是把每个三角形的边都描出来。
+    bool drawSurfaces{true};
+    /// 画不画实体的特征边。RenderMode::Shaded 关掉它。
+    bool drawEdges{true};
 };
 
 void FillFrameUniforms(const RenderView& view, uint32_t viewportWidth, uint32_t viewportHeight,
                        FrameUniforms& out);
+
+/// @brief 填一份线条类 push constant：模型矩阵转成相机相对、颜色、样式。
+/// @param model         对象 → 世界。
+/// @param cameraOrigin  一切都相对于它 —— 减法在 double 里做完再收窄，远离原点的
+///                      模型才不会抖（§4.3）。这是世界坐标变成相机相对坐标的唯一
+///                      一处。
+/// @param depthBias     朝观察者方向的 NDC 偏移量，用来避免与它所描画的表面打架。
+/// @note LinePass 和 EdgePass 共用。两者在 GPU 上画的是同一种东西 —— 屏幕空间撑
+///       开的四边形 —— 区别只在管线的深度策略和这里填进去的几个数。
+void FillCurvePushConstants(const Mat4d& model, const Vec3d& cameraOrigin, const Color& color,
+                            float width, LineStyle style, float depthBias,
+                            CurvePushConstants& out);
 
 } // namespace cadgeom::render

@@ -11,6 +11,7 @@
 #pragma once
 
 #include "render/GpuScene.h"
+#include "render/pass/EdgePass.h"
 #include "render/pass/GridPass.h"
 #include "render/pass/LinePass.h"
 #include "render/pass/MeshPass.h"
@@ -39,6 +40,7 @@ public:
     GpuScene& Geometry() { return geometry_; }
     GridPass& Grid() { return grid_; }
     MeshPass& Mesh() { return mesh_; }
+    EdgePass& Edges() { return edges_; }
     LinePass& Lines() { return lines_; }
     PointPass& Points() { return points_; }
 
@@ -58,6 +60,7 @@ private:
     GpuScene geometry_;
     GridPass grid_;
     MeshPass mesh_;
+    EdgePass edges_;
     LinePass lines_;
     PointPass points_;
 

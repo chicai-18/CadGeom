@@ -35,11 +35,6 @@ GraphicsPipelineBuilder& GraphicsPipelineBuilder::SetTopology(VkPrimitiveTopolog
     return *this;
 }
 
-GraphicsPipelineBuilder& GraphicsPipelineBuilder::SetPolygonMode(VkPolygonMode mode) {
-    polygonMode_ = mode;
-    return *this;
-}
-
 GraphicsPipelineBuilder& GraphicsPipelineBuilder::SetCullMode(VkCullModeFlags mode,
                                                               VkFrontFace frontFace) {
     cullMode_ = mode;
@@ -107,7 +102,9 @@ CgResult GraphicsPipelineBuilder::Build(Context& ctx, VkPipelineLayout layout,
 
     VkPipelineRasterizationStateCreateInfo raster{};
     raster.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-    raster.polygonMode = polygonMode_;
+    // 永远填充。线条和特征边都是在顶点着色器里撑开的四边形，谁也不需要
+    // VK_POLYGON_MODE_LINE —— 而那是个可选特性（§4.2）。
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
     raster.cullMode = cullMode_;
     raster.frontFace = frontFace_;
     raster.lineWidth = 1.0f;
