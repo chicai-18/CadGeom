@@ -12,7 +12,9 @@
 
 #include "render/GpuScene.h"
 #include "render/pass/GridPass.h"
+#include "render/pass/LinePass.h"
 #include "render/pass/MeshPass.h"
+#include "render/pass/PointPass.h"
 #include "render/vk/Context.h"
 #include "render/vk/DeleteQueue.h"
 
@@ -37,6 +39,8 @@ public:
     GpuScene& Geometry() { return geometry_; }
     GridPass& Grid() { return grid_; }
     MeshPass& Mesh() { return mesh_; }
+    LinePass& Lines() { return lines_; }
+    PointPass& Points() { return points_; }
 
     VkPipelineLayout PipelineLayout() const { return pipelineLayout_; }
     VkDescriptorSetLayout SceneSetLayout() const { return sceneSetLayout_; }
@@ -54,6 +58,8 @@ private:
     GpuScene geometry_;
     GridPass grid_;
     MeshPass mesh_;
+    LinePass lines_;
+    PointPass points_;
 
     VkDescriptorSetLayout sceneSetLayout_{VK_NULL_HANDLE};
     VkPipelineLayout pipelineLayout_{VK_NULL_HANDLE};

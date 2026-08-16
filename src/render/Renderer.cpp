@@ -8,6 +8,37 @@
 #include <algorithm>
 
 namespace cadgeom::render {
+namespace {
+
+bool SameColor(const Color& a, const Color& b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+}
+
+void NarrowRelative(const Vec3d& world, const Vec3d& cameraOrigin, float out[3]) {
+    // Subtract in double, then narrow — the whole point of camera-relative
+    // rendering, and the overlay is no more exempt from it than the scene is.
+    out[0] = static_cast<float>(world.x - cameraOrigin.x);
+    out[1] = static_cast<float>(world.y - cameraOrigin.y);
+    out[2] = static_cast<float>(world.z - cameraOrigin.z);
+}
+
+/// Grows a persistently mapped buffer to hold `bytes`, reusing it when it is
+/// already big enough. Never shrinks: an overlay's size swings with what the
+/// user is drawing, and giving the memory back only to ask for it again next
+/// frame is the one allocation pattern a frame loop cannot afford.
+CgResult EnsureUploadBuffer(vk::Context& ctx, vk::Buffer& buffer, VkDeviceSize bytes) {
+    if (buffer.IsValid() && buffer.size >= bytes) {
+        return CgResult::Ok;
+    }
+    const VkDeviceSize grown = std::max<VkDeviceSize>(bytes, buffer.size * 2);
+    // Safe to destroy outright: the caller has already waited on this slot's
+    // fence, so nothing on the GPU is still reading the old allocation.
+    vk::DestroyBuffer(ctx, buffer);
+    return vk::CreateBuffer(ctx, grown, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                            vk::BufferDomain::HostUpload, buffer);
+}
+
+} // namespace
 
 Renderer::~Renderer() {
     Shutdown();
@@ -149,6 +180,8 @@ void Renderer::DestroyFrames() {
             vkDestroyCommandPool(ctx.Device(), frame.pool, nullptr);
         }
         vk::DestroyBuffer(ctx, frame.uniforms);
+        vk::DestroyBuffer(ctx, frame.overlayLines);
+        vk::DestroyBuffer(ctx, frame.overlayPoints);
     }
     frames_.clear();
 
@@ -244,8 +277,92 @@ void Renderer::SetVsync(bool vsync) {
     }
 }
 
+CgResult Renderer::PrepareOverlay(Frame& frame, const RenderView& view,
+                                  const OverlayData& overlay) {
+    overlayLineRuns_.clear();
+    overlayPointRuns_.clear();
+
+    vk::Context& ctx = system_->Context();
+
+    if (!overlay.lines.empty()) {
+        const CgResult r = EnsureUploadBuffer(
+            ctx, frame.overlayLines, overlay.lines.size() * sizeof(GpuLineInstance));
+        if (CgFailed(r)) {
+            return r;
+        }
+
+        auto* dst = static_cast<GpuLineInstance*>(frame.overlayLines.mapped);
+        for (size_t i = 0; i < overlay.lines.size(); ++i) {
+            const OverlayLine& line = overlay.lines[i];
+            GpuLineInstance instance{};
+            NarrowRelative(line.a, view.cameraOrigin, instance.a);
+            NarrowRelative(line.b, view.cameraOrigin, instance.b);
+            instance.arcA = static_cast<float>(line.arcA);
+            instance.arcB = static_cast<float>(line.arcB);
+            dst[i] = instance;
+
+            // Everything a run carries lives in push constants, so a change in
+            // any of it starts a new draw. A previewed circle is one run.
+            const bool continues = !overlayLineRuns_.empty() &&
+                                   SameColor(overlayLineRuns_.back().color, line.color) &&
+                                   overlayLineRuns_.back().size == line.width &&
+                                   overlayLineRuns_.back().style == line.style;
+            if (continues) {
+                ++overlayLineRuns_.back().instanceCount;
+            } else {
+                OverlayRun run{};
+                run.firstInstance = static_cast<uint32_t>(i);
+                run.instanceCount = 1;
+                run.color = line.color;
+                run.size = line.width;
+                run.style = line.style;
+                overlayLineRuns_.push_back(run);
+            }
+        }
+        const CgResult flushed = vk::FlushBuffer(ctx, frame.overlayLines);
+        if (CgFailed(flushed)) {
+            return flushed;
+        }
+    }
+
+    if (!overlay.points.empty()) {
+        const CgResult r = EnsureUploadBuffer(
+            ctx, frame.overlayPoints, overlay.points.size() * sizeof(GpuPointInstance));
+        if (CgFailed(r)) {
+            return r;
+        }
+
+        auto* dst = static_cast<GpuPointInstance*>(frame.overlayPoints.mapped);
+        for (size_t i = 0; i < overlay.points.size(); ++i) {
+            const OverlayPoint& point = overlay.points[i];
+            NarrowRelative(point.position, view.cameraOrigin, dst[i].position);
+
+            const bool continues = !overlayPointRuns_.empty() &&
+                                   SameColor(overlayPointRuns_.back().color, point.color) &&
+                                   overlayPointRuns_.back().size == point.size;
+            if (continues) {
+                ++overlayPointRuns_.back().instanceCount;
+            } else {
+                OverlayRun run{};
+                run.firstInstance = static_cast<uint32_t>(i);
+                run.instanceCount = 1;
+                run.color = point.color;
+                run.size = point.size;
+                overlayPointRuns_.push_back(run);
+            }
+        }
+        const CgResult flushed = vk::FlushBuffer(ctx, frame.overlayPoints);
+        if (CgFailed(flushed)) {
+            return flushed;
+        }
+    }
+
+    return CgResult::Ok;
+}
+
 void Renderer::RecordFrame(VkCommandBuffer cmd, const RenderView& view,
-                           const SceneSnapshot& snapshot, VkImage presentImage) {
+                           const SceneSnapshot& snapshot, const Frame& frame,
+                           VkImage presentImage) {
     // UNDEFINED as the old layout on purpose: the previous contents are being
     // cleared anyway, and asking the driver to preserve them would be a lie.
     vk::TransitionImage(cmd, color_.handle, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
@@ -292,16 +409,23 @@ void Renderer::RecordFrame(VkCommandBuffer cmd, const RenderView& view,
     scissor.extent = extent_;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    const Frame& frame = frames_[frameSlot_];
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, system_->PipelineLayout(), 0, 1,
-                            &frame.descriptor, 0, nullptr);
+    const VkPipelineLayout layout = system_->PipelineLayout();
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &frame.descriptor,
+                            0, nullptr);
 
     // Grid first: it is the only opaque-ish surface that blends, so drawing it
-    // before the solids lets the depth test resolve the rest normally.
+    // before the solids lets the depth test resolve the rest normally. Then
+    // solids, then wires and points on top of them, then the overlay, which is
+    // not depth tested at all.
     if (view.showGrid) {
         system_->Grid().Record(cmd);
     }
-    system_->Mesh().Record(cmd, system_->PipelineLayout(), system_->Geometry(), snapshot, view);
+    system_->Mesh().Record(cmd, layout, system_->Geometry(), snapshot, view);
+    system_->Lines().Record(cmd, layout, system_->Geometry(), snapshot, view);
+    system_->Points().Record(cmd, layout, system_->Geometry(), snapshot, view);
+
+    system_->Lines().RecordOverlay(cmd, layout, frame.overlayLines.handle, overlayLineRuns_);
+    system_->Points().RecordOverlay(cmd, layout, frame.overlayPoints.handle, overlayPointRuns_);
 
     vkCmdEndRendering(cmd);
 
@@ -320,7 +444,8 @@ void Renderer::RecordFrame(VkCommandBuffer cmd, const RenderView& view,
     }
 }
 
-CgResult Renderer::Render(const RenderView& view, const SceneSnapshot& snapshot) {
+CgResult Renderer::Render(const RenderView& view, const SceneSnapshot& snapshot,
+                          const OverlayData& overlay) {
     if (!system_ || !system_->Context().IsValid()) {
         return core::SetError(CgResult::InvalidState, "Render() on an uninitialised viewport");
     }
@@ -362,9 +487,16 @@ CgResult Renderer::Render(const RenderView& view, const SceneSnapshot& snapshot)
     }
 
     FrameUniforms uniforms{};
-    FillFrameUniforms(view, uniforms);
+    FillFrameUniforms(view, extent_.width, extent_.height, uniforms);
     memcpy(frame.uniforms.mapped, &uniforms, sizeof(uniforms));
     vk::FlushBuffer(ctx, frame.uniforms);
+
+    // After the fence wait above, so rewriting this slot's overlay buffers
+    // cannot race a submission still reading them.
+    const CgResult prepared = PrepareOverlay(frame, view, overlay);
+    if (CgFailed(prepared)) {
+        return prepared;
+    }
 
     CG_VK_REQUIRE(vkResetFences(ctx.Device(), 1, &frame.inFlight), "vkResetFences");
     CG_VK_REQUIRE(vkResetCommandPool(ctx.Device(), frame.pool, 0), "vkResetCommandPool");
@@ -374,7 +506,7 @@ CgResult Renderer::Render(const RenderView& view, const SceneSnapshot& snapshot)
     begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     CG_VK_REQUIRE(vkBeginCommandBuffer(frame.cmd, &begin), "vkBeginCommandBuffer");
 
-    RecordFrame(frame.cmd, view, snapshot,
+    RecordFrame(frame.cmd, view, snapshot, frame,
                 presents_ ? swapchain_.ImageAt(imageIndex) : VK_NULL_HANDLE);
 
     CG_VK_REQUIRE(vkEndCommandBuffer(frame.cmd), "vkEndCommandBuffer");

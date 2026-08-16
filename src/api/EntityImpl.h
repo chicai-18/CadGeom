@@ -11,13 +11,16 @@ namespace cadgeom::api {
 
 class SceneImpl;
 
-/// M0 scaffolding: one heap node per entity, owned by the scene.
+/// One heap node per entity, owned by the scene.
 ///
 /// The architecture calls for a struct-of-arrays EntityStore with dirty flags
-/// (docs/architecture.md §5) — that lands in M1/M2 alongside GpuScene, which is
-/// the consumer that makes SoA worth the bookkeeping. What matters now is that
-/// the *interface* is already the final one, so swapping the storage out later
-/// touches nothing the host can see.
+/// (docs/architecture.md §5). That trade only pays for itself at a scene size
+/// the engine has not met yet, and the *interface* is already the final one, so
+/// swapping the storage out later touches nothing the host can see.
+///
+/// An entity owns its shape: destroying one gives the shape back to the kernel
+/// unless it was detached first, which is how the undo stack keeps geometry
+/// alive across a delete.
 class EntityImpl final : public IEntity {
 public:
     EntityImpl(SceneImpl& scene, EntityId id, const char* name, EntityId parent);
@@ -54,10 +57,11 @@ public:
     void RemoveChild(EntityId child);
     const std::vector<EntityId>& Children() const { return children_; }
 
-    void SetShape(ShapeId shape, ShapeType type) {
-        shape_ = shape;
-        shapeType_ = type;
-    }
+    void SetShape(ShapeId shape, ShapeType type);
+
+    /// Gives up ownership of the shape without destroying it. The caller — an
+    /// undoable delete, always — becomes responsible for it.
+    ShapeId DetachShape();
 
 private:
     core::ObjectTracker tracker_;
@@ -69,10 +73,12 @@ private:
 
     std::string name_;
     Transform local_{};
+    /// Visibility lives in here, in EntityStyle::visible, rather than beside it:
+    /// two sources for one fact is how SetStyle() and SetVisible() end up
+    /// disagreeing about whether an entity is on screen.
     EntityStyle style_{};
     ShapeId shape_{kInvalidShape};
     ShapeType shapeType_{ShapeType::None};
-    bool visible_{true};
 };
 
 } // namespace cadgeom::api

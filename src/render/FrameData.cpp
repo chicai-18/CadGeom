@@ -32,7 +32,8 @@ double FoldIntoPeriod(double value, double period) {
 
 } // namespace
 
-void FillFrameUniforms(const RenderView& view, FrameUniforms& out) {
+void FillFrameUniforms(const RenderView& view, uint32_t viewportWidth, uint32_t viewportHeight,
+                       FrameUniforms& out) {
     Narrow(view.viewProj, out.viewProj);
     Narrow(Inverse(view.viewProj), out.invViewProj);
     Narrow(view.forward, view.perspective ? 1.0 : 0.0, out.viewDir);
@@ -53,6 +54,15 @@ void FillFrameUniforms(const RenderView& view, FrameUniforms& out) {
     // which is the only place it is read.
     out.gridOffset[2] = static_cast<float>(view.cameraOrigin.x);
     out.gridOffset[3] = static_cast<float>(view.cameraOrigin.y);
+
+    // Screen-space expansion needs to know what a pixel is worth. A degenerate
+    // camera would otherwise hand the shader an infinity and every line in the
+    // frame would vanish.
+    const double worldPerPixel = view.pixelWorldSize > 0.0 ? view.pixelWorldSize : 1.0;
+    out.lineParams[0] = static_cast<float>(1.0 / worldPerPixel);
+    out.lineParams[1] = static_cast<float>(viewportWidth);
+    out.lineParams[2] = static_cast<float>(viewportHeight);
+    out.lineParams[3] = 0.0f;
 }
 
 } // namespace cadgeom::render

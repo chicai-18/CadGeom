@@ -1,5 +1,6 @@
 #include "api/SceneImpl.h"
 
+#include "api/Commands.h"
 #include "core/Error.h"
 #include "core/Log.h"
 #include "core/Math.h"
@@ -8,11 +9,14 @@
 
 namespace cadgeom::api {
 
-SceneImpl::SceneImpl() : selection_(*this), commands_(*this), builder_(*this) {}
+SceneImpl::SceneImpl()
+    : kernel_(geom::CreateSimpleKernel()), selection_(*this), commands_(*this), builder_(*this) {}
 
 SceneImpl::~SceneImpl() {
     // Drop commands before entities: a command may hold ids it wants to report
-    // on, and releasing in the other order would have it looking at rubble.
+    // on, and releasing in the other order would have it looking at rubble. A
+    // command holding a detached shape gives it back to the kernel here, which
+    // is why the kernel is the last member standing.
     commands_.Clear();
     entities_.clear();
     order_.clear();
@@ -23,14 +27,28 @@ IGeometryBuilder* SceneImpl::GetGeometryBuilder() {
     return &builder_;
 }
 
-EntityId SceneImpl::CreateGroup(const char* utf8Name, EntityId parent) {
+EntityId SceneImpl::CreateEntityInternal(const char* utf8Name, EntityId parent,
+                                         EntityId preferredId) {
     if (IsValid(parent) && !Exists(parent)) {
-        core::SetError(CgResult::InvalidHandle, "CreateGroup: parent %llu does not exist",
+        core::SetError(CgResult::InvalidHandle, "parent %llu does not exist",
                        static_cast<unsigned long long>(parent.value));
         return kInvalidEntity;
     }
 
-    const EntityId id{nextEntityId_++};
+    EntityId id = preferredId;
+    if (IsValid(id)) {
+        if (Exists(id)) {
+            core::SetError(CgResult::InvalidState, "entity id %llu is already in use",
+                           static_cast<unsigned long long>(id.value));
+            return kInvalidEntity;
+        }
+        // Keep the counter ahead of anything ever handed out, so a fresh id can
+        // never collide with one an undo is holding in reserve.
+        nextEntityId_ = std::max(nextEntityId_, id.value + 1);
+    } else {
+        id = EntityId{nextEntityId_++};
+    }
+
     entities_.emplace(id.value, std::make_unique<EntityImpl>(*this, id, utf8Name, parent));
     order_.push_back(id);
 
@@ -44,7 +62,11 @@ EntityId SceneImpl::CreateGroup(const char* utf8Name, EntityId parent) {
     return id;
 }
 
-CgResult SceneImpl::DestroyEntity(EntityId entity) {
+EntityId SceneImpl::CreateGroup(const char* utf8Name, EntityId parent) {
+    return CreateEntityInternal(utf8Name, parent, kInvalidEntity);
+}
+
+CgResult SceneImpl::DestroyEntityInternal(EntityId entity) {
     EntityImpl* e = FindEntity(entity);
     if (!e) {
         return core::SetError(CgResult::InvalidHandle, "DestroyEntity: unknown entity %llu",
@@ -67,24 +89,26 @@ CgResult SceneImpl::DestroyEntity(EntityId entity) {
     return CgResult::Ok;
 }
 
+CgResult SceneImpl::DestroyEntity(EntityId entity) {
+    return DestroyEntities(CgSpan<const EntityId>{&entity, 1});
+}
+
 CgResult SceneImpl::DestroyEntities(CgSpan<const EntityId> entities) {
     if (!entities.data && entities.count > 0) {
         return core::SetError(CgResult::InvalidArgument, "DestroyEntities: null span");
     }
 
-    // Keep going after a bad id — a caller deleting a selection should not be
-    // left with a half-deleted scene because one entry went stale.
-    CgResult worst = CgResult::Ok;
-    for (size_t i = 0; i < entities.count; ++i) {
-        if (!Exists(entities.data[i])) {
-            continue;  // Already gone, possibly as a descendant of an earlier id.
-        }
-        const CgResult r = DestroyEntity(entities.data[i]);
-        if (CgFailed(r) && CgSucceeded(worst)) {
-            worst = r;
-        }
+    // Through a command, so deleting is as undoable as creating. The command
+    // reduces the request to its outermost entities, which is what lets a
+    // caller pass a selection holding both a parent and its child.
+    auto* command = new DestroyEntitiesCommand(*this, entities);
+    if (!command->HasTargets()) {
+        command->Release();
+        return core::SetError(CgResult::InvalidHandle,
+                              "DestroyEntities: none of the %zu id(s) name a live entity",
+                              entities.count);
     }
-    return worst;
+    return commands_.Push(command);
 }
 
 void SceneImpl::DestroyRecursive(EntityId id) {
@@ -194,6 +218,11 @@ CgResult SceneImpl::SetParent(EntityId entity, EntityId parent) {
         roots_.erase(std::remove(roots_.begin(), roots_.end(), entity), roots_.end());
     }
 
+    // Captured before the relink, because the old parent chain is what defines
+    // the world transform the entity has to keep.
+    Mat4d world{};
+    e->GetWorldTransform(world);
+
     e->SetParentId(parent);
 
     if (IsValid(parent)) {
@@ -202,10 +231,23 @@ CgResult SceneImpl::SetParent(EntityId entity, EntityId parent) {
         roots_.push_back(entity);
     }
 
-    // Reparenting is documented as preserving the world transform. Doing that
-    // properly needs the inverse of the new parent's world matrix, which comes
-    // with the transform-propagation pass in M1; until then the local transform
-    // is carried over unchanged.
+    // Rebase the local transform so the entity does not move on screen. A
+    // sheared parent chain cannot be expressed as a TRS and the decomposition
+    // says so; the entity then keeps its old local transform rather than being
+    // handed a silently wrong one.
+    Mat4d parentWorld = Mat4Identity();
+    if (IsValid(parent)) {
+        FindEntity(parent)->GetWorldTransform(parentWorld);
+    }
+    Transform rebased{};
+    if (Decompose(Inverse(parentWorld) * world, rebased)) {
+        e->SetLocalTransform(rebased);
+    } else {
+        CG_WARN("SetParent: the new parent's transform does not decompose; entity %llu keeps "
+                "its local transform and will move",
+                static_cast<unsigned long long>(entity.value));
+    }
+
     MarkTransformDirty(entity);
     return CgResult::Ok;
 }
@@ -253,8 +295,11 @@ uint64_t SceneImpl::GetRevision() const {
 }
 
 void SceneImpl::MarkTransformDirty(EntityId entity) {
-    // M1 turns this into a real dirty-set walked once per frame. For now the
-    // revision counter is enough for a host to know something moved.
+    // World transforms are still walked on demand rather than cached, so there
+    // is no dirty set to add to yet — the revision counter is what tells a
+    // renderer its snapshot went stale. The cached-world-matrix flush belongs
+    // with the SoA EntityStore, and neither pays for itself until the scene is
+    // big enough for the walk to show up in a profile.
     (void)entity;
     BumpRevision();
 }

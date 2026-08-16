@@ -4,6 +4,7 @@
 
 #include "core/Error.h"
 #include "core/Log.h"
+#include "interact/tools/DrawTools.h"
 
 #if CADGEOM_HAS_VULKAN
 #include "api/ViewportImpl.h"
@@ -34,6 +35,13 @@ EngineImpl::EngineImpl(const EngineDesc& desc)
       tools_(*this),
       io_(*this) {
     g_liveEngines.fetch_add(1, std::memory_order_relaxed);
+
+    // The built-ins are engine-owned like any other registered tool, so they go
+    // through the same RegisterTool path a host would use — and can be replaced
+    // by a host that registers its own under the same id.
+    interact::RegisterBuiltinTools(tools_, tools_.Settings());
+    tools_.Activate(ToolId::Select);
+
     CG_INFO("engine created for '%s' (kernel=%s, validation=%s)", appName_.c_str(),
             kernelType_ == KernelType::Simple ? "Simple" : "Occt",
             validation_ ? "on" : "off");
@@ -174,30 +182,86 @@ void EngineImpl::Tick(double deltaSeconds) {
 
 #if CADGEOM_HAS_VULKAN
 
+bool EngineImpl::IsEffectivelyVisible(EntityId entity) const {
+    EntityId cursor = entity;
+    while (IsValid(cursor)) {
+        const EntityImpl* e = scene_.FindEntity(cursor);
+        if (!e) {
+            return false;
+        }
+        if (!e->IsVisible()) {
+            return false;
+        }
+        cursor = e->GetParent();
+    }
+    return true;
+}
+
 void EngineImpl::UpdateSnapshot() {
     const uint64_t revision = scene_.GetRevision();
     if (snapshotValid_ && revision == snapshotRevision_) {
         return;
     }
 
-    snapshot_.meshes.clear();
-    snapshot_.items.clear();
+    snapshot_.Clear();
+    geom::IGeometryKernel& kernel = scene_.Kernel();
 
-    // M2 walks the scene here, collecting each visible entity's tessellated
-    // mesh and world transform. Until the kernel exists there is nothing in the
-    // scene that carries geometry, so the placeholder below is what MeshPass
-    // draws — and it stops being used the moment a real mesh turns up.
-    if (snapshot_.items.empty()) {
-        if (placeholderMesh_.IsEmpty()) {
-            placeholderMesh_ = geom::MakeBox(Vec3d{0.0, 0.0, 5.0}, Vec3d{10.0, 10.0, 10.0});
+    const uint32_t count = scene_.GetEntityCount();
+    for (uint32_t i = 0; i < count; ++i) {
+        const EntityId id = scene_.GetEntityAt(i);
+        const EntityImpl* entity = scene_.FindEntity(id);
+        if (!entity || !IsValid(entity->GetShape()) || !IsEffectivelyVisible(id)) {
+            continue;
         }
-        render::DrawItem item{};
-        item.meshIndex = 0;
-        item.worldTransform = Mat4Identity();
-        item.color = Color{0.62f, 0.65f, 0.70f, 1.0f};
 
-        snapshot_.meshes.push_back(&placeholderMesh_);
-        snapshot_.items.push_back(item);
+        // Resolve tessellates on demand. The pointers it hands back stay valid
+        // until the shape's parameters move, and that bumps the revision, which
+        // is what brings us back here.
+        const geom::Shape* shape = kernel.Resolve(entity->GetShape());
+        if (!shape) {
+            continue;
+        }
+
+        Mat4d world{};
+        entity->GetWorldTransform(world);
+        EntityStyle style{};
+        entity->GetStyle(style);
+
+        if (!shape->mesh.IsEmpty()) {
+            render::DrawItem item{};
+            item.meshIndex = static_cast<uint32_t>(snapshot_.meshes.size());
+            item.worldTransform = world;
+            item.color = style.color;
+            snapshot_.meshes.push_back(&shape->mesh);
+            snapshot_.items.push_back(item);
+        }
+
+        if (shape->wire.positions.empty()) {
+            continue;
+        }
+        const auto curveIndex = static_cast<uint32_t>(snapshot_.curves.size());
+        snapshot_.curves.push_back(&shape->wire);
+
+        if (shape->wire.SegmentCount() > 0) {
+            render::CurveItem item{};
+            item.curveIndex = curveIndex;
+            item.worldTransform = world;
+            item.color = style.color;
+            item.width = style.lineWidth;
+            item.style = style.lineStyle;
+            snapshot_.curveItems.push_back(item);
+        }
+        if (entity->GetShapeType() == ShapeType::Point) {
+            // Only point shapes draw markers. A polyline's vertices are in the
+            // same buffer and could be drawn the same way, which is what vertex
+            // display and snap highlighting will use in M3.
+            render::PointItem item{};
+            item.curveIndex = curveIndex;
+            item.worldTransform = world;
+            item.color = style.color;
+            item.size = style.pointSize;
+            snapshot_.pointItems.push_back(item);
+        }
     }
 
     snapshot_.revision = revision;

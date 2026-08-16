@@ -3,17 +3,21 @@
 #include <cadgeom/IGeometryBuilder.h>
 
 #include "core/ObjectTracker.h"
+#include "geom/Shape.h"
 
 namespace cadgeom::api {
 
 class SceneImpl;
 
-/// M0 stub. The contract is final; the implementation waits on the geometry
-/// kernel (docs/architecture.md §3, milestone M2).
+/// Parametric creation, on top of the kernel and through the undo stack.
 ///
-/// Every creation call fails with CgResult::NotImplemented and a message that
-/// names the milestone, so a host wiring itself up against these headers today
-/// gets a straight answer instead of a null-pointer mystery.
+/// Every method here builds a geom::ShapeDef, validates it, and pushes a
+/// CreateShapeCommand — so the shape exists, the entity referencing it exists,
+/// and Ctrl+Z takes both away again, without any caller having to arrange that.
+///
+/// The parameters are the source of truth from this point on. Nothing in this
+/// class produces triangles; the kernel tessellates on demand and re-tessellates
+/// when a parameter moves (docs/architecture.md §3.1).
 class GeometryBuilderImpl final : public IGeometryBuilder {
 public:
     explicit GeometryBuilderImpl(SceneImpl& scene);
@@ -38,15 +42,19 @@ public:
     void GetTessParams(TessParams& out) const override;
 
 private:
-    static EntityId NotYet(const char* what);
+    /// Validates, names and commits one definition. kInvalidEntity on failure,
+    /// with the reason already in the thread's error slot.
+    EntityId Build(geom::ShapeDef def);
+
+    /// "Circle 3" — a per-type running number, so a fresh scene reads as a
+    /// parts list rather than as nine objects all called "Circle".
+    void MakeName(ShapeType type, char* buffer, size_t bufferSize);
 
     core::ObjectTracker tracker_;
     SceneImpl& scene_;
 
-    /// Defaults chosen for a model measured in millimetres: a 0.01 mm chord
-    /// deviation is well below what a display can resolve, and the 12-degree
-    /// angular cap keeps small circles from collapsing into triangles.
-    TessParams tess_{0.01, 12.0 * 3.14159265358979323846 / 180.0};
+    /// One counter per ShapeType, indexed by its enum value.
+    uint32_t nameCounters_[16]{};
 };
 
 } // namespace cadgeom::api

@@ -4,6 +4,9 @@
 
 #include "core/ObjectTracker.h"
 #include "interact/OrbitCamera.h"
+#include "interact/OverlayBuilder.h"
+#include "interact/ToolContext.h"
+#include "render/Overlay.h"
 #include "render/Renderer.h"
 #include "render/Surface.h"
 
@@ -18,9 +21,11 @@ class EngineImpl;
 /// Owned by the engine even when the host releases it early, which is why
 /// Release() goes back through the engine rather than deleting `this`.
 ///
-/// Input handling is camera navigation only at M1. From M2 the active tool gets
-/// first refusal on every event and the camera handles what is left over
-/// (docs/architecture.md §6.2).
+/// Input is split by button, not by priority: middle and right belong to the
+/// camera, left and the keyboard go to the active tool first and fall through to
+/// the camera when the tool declines (docs/architecture.md §6.2). Splitting it
+/// any other way means a tool that wants mouse-move updates for its rubber band
+/// also swallows the orbit drag.
 class ViewportImpl final : public IViewport {
 public:
     ViewportImpl(EngineImpl& engine, std::unique_ptr<render::Surface> surface);
@@ -62,9 +67,21 @@ public:
 
 private:
     void OnSurfaceResized(uint32_t width, uint32_t height);
-    bool HandleCameraMouse(const MouseEvent& e);
+    bool HandleCameraMouse(const MouseEvent& e, double dx, double dy);
     bool HandleCameraKey(const KeyEvent& e);
+    /// Keyboard tool switching. Deliberately here and not in the host: for a
+    /// Glfw-backed viewport the engine owns the window, so the host never sees
+    /// the key at all.
+    bool HandleToolKey(const KeyEvent& e);
     render::RenderView BuildRenderView() const;
+
+    /// Makes this viewport's context the current one and returns the active
+    /// tool, or null when there is none.
+    ITool* ActiveTool();
+
+    /// Spacing the grid shader is currently drawing, which is also what grid
+    /// snapping rounds to.
+    double GridSpacing() const;
 
     core::ObjectTracker tracker_;
     EngineImpl& engine_;
@@ -72,6 +89,11 @@ private:
     std::unique_ptr<render::Surface> surface_;
     render::Renderer renderer_;
     interact::OrbitCamera camera_;
+
+    /// Declared after the camera it refers to.
+    interact::ToolContext toolContext_;
+    render::OverlayData overlay_;
+    interact::OverlayBuilder overlayBuilder_;
 
     Color background_{0.16f, 0.17f, 0.19f, 1.0f};
     RenderMode renderMode_{RenderMode::ShadedWithEdges};

@@ -2,6 +2,32 @@
 
 namespace cadgeom::geom {
 
+void PolylineData::AddChain(uint32_t first, uint32_t count, bool closed, double startLength) {
+    if (count < 2) {
+        // A single point is a legitimate chain with no segments — a Point shape
+        // is exactly that — so this is not an error, just nothing to connect.
+        if (count == 1) {
+            length = startLength;
+        }
+        return;
+    }
+
+    const uint32_t segments = closed ? count : count - 1;
+    indices.reserve(indices.size() + segments * 2u);
+    arcStart.reserve(arcStart.size() + segments);
+
+    double accumulated = startLength;
+    for (uint32_t i = 0; i < segments; ++i) {
+        const uint32_t a = first + i;
+        const uint32_t b = first + ((i + 1) % count);
+        indices.push_back(a);
+        indices.push_back(b);
+        arcStart.push_back(accumulated);
+        accumulated += Distance(positions[a], positions[b]);
+    }
+    length = accumulated;
+}
+
 MeshData MakeBox(const Vec3d& center, const Vec3d& size) {
     const Vec3d h{0.5 * size.x, 0.5 * size.y, 0.5 * size.z};
 

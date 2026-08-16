@@ -313,18 +313,19 @@ TEST_CASE("unbuilt subsystems report the milestone that brings them", "[scene][p
     IScene& scene = fixture.Scene();
 
     Aabb bounds{};
-    CHECK_FALSE(scene.GetBounds(bounds));  // Needs tessellated geometry: M2.
+    CHECK_FALSE(scene.GetBounds(bounds));  // Nothing in the scene to bound.
 
     PickResult hit{};
     const Ray ray{Vec3d{0, 0, 10}, Vec3d{0, 0, -1}};
     CHECK_FALSE(scene.Raycast(ray, PickFilter_All, hit));
     CHECK(fixture.Engine().GetLastError() == CgResult::NotImplemented);
 
-    CHECK_FALSE(IsValid(scene.GetGeometryBuilder()->MakePoint(Vec3d{0, 0, 0})));
-    CHECK(fixture.Engine().GetLastError() == CgResult::NotImplemented);
+    // A group is a legitimate entity with no geometry, so it bounds nothing.
+    scene.CreateGroup("Empty", kInvalidEntity);
+    CHECK_FALSE(scene.GetBounds(bounds));
 }
 
-TEST_CASE("tessellation quality is settable ahead of the kernel", "[scene]") {
+TEST_CASE("tessellation quality round-trips through the builder", "[scene]") {
     cgtest::EngineFixture fixture;
     IGeometryBuilder& builder = *fixture.Scene().GetGeometryBuilder();
 

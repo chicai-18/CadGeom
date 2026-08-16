@@ -7,6 +7,7 @@
 #include "api/GeometryBuilderImpl.h"
 #include "api/SelectionImpl.h"
 #include "core/ObjectTracker.h"
+#include "geom/Kernel.h"
 
 #include <memory>
 #include <unordered_map>
@@ -53,10 +54,27 @@ public:
     EntityImpl* FindEntity(EntityId id);
     const EntityImpl* FindEntity(EntityId id) const;
 
+    /// The geometry kernel every shape in this scene lives in.
+    geom::IGeometryKernel& Kernel() { return *kernel_; }
+    const geom::IGeometryKernel& Kernel() const { return *kernel_; }
+
     /// Bump whenever anything a renderer or a host would observe changes.
     void BumpRevision() { ++revision_; }
 
     void MarkTransformDirty(EntityId entity);
+
+    /// Adds an entity without going through the undo stack — the primitive the
+    /// engine's own commands are built from.
+    ///
+    /// `preferredId` is how undo puts an entity back under the id it had:
+    /// anything else holding that id (a later command, a host's bookkeeping)
+    /// would otherwise be left pointing at nothing. Pass kInvalidEntity to
+    /// allocate a fresh one.
+    EntityId CreateEntityInternal(const char* utf8Name, EntityId parent, EntityId preferredId);
+
+    /// Destroys an entity and its descendants without touching the undo stack.
+    /// Any shape still attached goes back to the kernel with it.
+    CgResult DestroyEntityInternal(EntityId entity);
 
     /// For handing `this` to ICommand callbacks without a cast at every site.
     IScene* AsInterface() { return this; }
@@ -66,6 +84,11 @@ private:
     bool WouldCreateCycle(EntityId entity, EntityId newParent) const;
 
     core::ObjectTracker tracker_;
+
+    /// Declared first so it outlives every entity below it: an entity hands its
+    /// shape back on destruction, and doing that to a dead kernel would be the
+    /// last thing this scene ever did.
+    std::unique_ptr<geom::IGeometryKernel> kernel_;
 
     std::unordered_map<uint64_t, std::unique_ptr<EntityImpl>> entities_;
     /// Insertion order for stable index-based enumeration across the boundary.

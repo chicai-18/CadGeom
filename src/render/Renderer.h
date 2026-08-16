@@ -8,6 +8,7 @@
 
 #include "render/FrameData.h"
 #include "render/GpuScene.h"
+#include "render/Overlay.h"
 #include "render/RenderSystem.h"
 #include "render/Surface.h"
 #include "render/vk/Swapchain.h"
@@ -29,7 +30,12 @@ public:
 
     /// Renders and presents one frame. Ok when a frame went out, Ok-with-no-op
     /// when the window is minimised, DeviceLost when the caller has to rebuild.
-    CgResult Render(const RenderView& view, const SceneSnapshot& snapshot);
+    ///
+    /// `overlay` is this frame's preview geometry and is consumed here: unlike
+    /// the snapshot it is not cached, because it is rebuilt from the active
+    /// tool's state every single frame.
+    CgResult Render(const RenderView& view, const SceneSnapshot& snapshot,
+                    const OverlayData& overlay);
 
     /// Marks the swapchain stale. The rebuild happens at the start of the next
     /// Render() so it lands between frames rather than inside one.
@@ -53,6 +59,12 @@ private:
         VkFence inFlight{VK_NULL_HANDLE};
         vk::Buffer uniforms;
         VkDescriptorSet descriptor{VK_NULL_HANDLE};
+
+        /// Host-visible and rewritten every frame. Per slot rather than shared,
+        /// for the same reason the uniform buffer is: the GPU may still be
+        /// reading the other slot's copy.
+        vk::Buffer overlayLines;
+        vk::Buffer overlayPoints;
     };
 
     CgResult CreateFrames();
@@ -61,8 +73,13 @@ private:
     CgResult RecreateTargets();
     void DestroyTargets();
 
+    /// Narrows this frame's overlay into `frame`'s host-visible buffers and
+    /// groups it into as few instanced draws as its styles allow. Only safe once
+    /// the slot's fence has been waited on.
+    CgResult PrepareOverlay(Frame& frame, const RenderView& view, const OverlayData& overlay);
+
     void RecordFrame(VkCommandBuffer cmd, const RenderView& view, const SceneSnapshot& snapshot,
-                     VkImage presentImage);
+                     const Frame& frame, VkImage presentImage);
 
     RenderSystem* system_{nullptr};
     Surface* surface_{nullptr};
@@ -83,6 +100,11 @@ private:
     /// semaphore for a different image is exactly the sort of thing that only
     /// misbehaves on someone else's driver.
     std::vector<VkSemaphore> presentSemaphores_;
+
+    /// Rebuilt every frame by PrepareOverlay and consumed immediately by
+    /// RecordFrame. Members rather than locals so the allocation happens once.
+    std::vector<OverlayRun> overlayLineRuns_;
+    std::vector<OverlayRun> overlayPointRuns_;
 
     uint32_t frameSlot_{0};
     bool needsRecreate_{false};

@@ -6,10 +6,12 @@ standalone.
 
 Design document: [`docs/architecture.md`](docs/architecture.md).
 
-> **Status: milestone M0 (skeleton).** The public API is complete and frozen;
-> the geometry kernel (M2) and the Vulkan renderer (M1) are not built yet. Calls
-> into those areas return `CgResult::NotImplemented` with a message naming the
-> milestone that brings them.
+> **Status: milestone M2 (geometry and lines).** The public API is complete and
+> frozen. Working: the Vulkan renderer, the geometry kernel, points/lines/arcs/
+> circles/rectangles/polylines, screen-space line rendering with dash patterns,
+> the work plane, the interactive tools and undo/redo. Not built yet: picking and
+> gizmos (M3), extrude and solids (M4), OBJ/glTF (M5). Calls into those return
+> `CgResult::NotImplemented` with a message naming the milestone that brings them.
 
 ## Building
 
@@ -28,8 +30,15 @@ ctest --test-dir build -C Debug --output-on-failure
 
 The [Vulkan SDK](https://vulkan.lunarg.com/) (>= 1.3.275) is the only dependency
 not vendored. Without it the build simply omits the renderer and tells you so —
-M0 builds, tests and runs fine on a machine that has never seen it. Everything
-else lives in `external/` as a pinned git submodule.
+the kernel, the scene, the tools and the whole test suite build and run fine on a
+machine that has never seen it. Everything else lives in `external/` as a pinned
+git submodule.
+
+```sh
+# No display, or checking a render change without eyeballing a window:
+./build/bin/Debug/glfw_viewer.exe --headless --screenshot shot.png
+./build/bin/Debug/glfw_viewer.exe --headless --perspective --screenshot iso.png
+```
 
 | Option | Default | |
 |---|---|---|
@@ -78,12 +87,18 @@ and has no effect on the ABI, so use it or ignore it as you prefer.
 ```
 include/cadgeom/   public headers — the only contract
 src/core/          double math, logging, errors, object tracking
+src/geom/          the kernel: parametric curves, tessellation
+src/render/        Vulkan RHI, passes, surfaces
+src/interact/      camera, work plane, tools, overlay
 src/api/           interface implementations + the exported factory
+shaders/           GLSL, compiled to SPIR-V and embedded in the DLL
 examples/          standalone demo
 tests/             unit tests (never depend on Vulkan)
 external/          pinned submodules
 docs/              architecture
 ```
+
+Dependencies point down only: `api/ → interact/ → scene · io · render → geom → core`.
 
 ## Design notes
 

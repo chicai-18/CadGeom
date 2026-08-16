@@ -16,28 +16,77 @@
 
 namespace cadgeom::render {
 
-/// One draw. `meshIndex` indexes SceneSnapshot::meshes.
+/// One shaded draw. `meshIndex` indexes SceneSnapshot::meshes.
 struct DrawItem {
     Mat4d worldTransform{Mat4Identity()};
     Color color{0.75f, 0.76f, 0.78f, 1.0f};
     uint32_t meshIndex{0};
 };
 
-struct SceneSnapshot {
-    /// Bumped by the scene whenever anything the renderer cares about changed.
-    /// Equal revisions mean the vertex data on the GPU is still current.
-    uint64_t revision{0};
-    /// Non-owning; the api layer keeps the meshes alive across the call.
-    std::vector<const geom::MeshData*> meshes;
-    std::vector<DrawItem> items;
+/// One wireframe draw: every segment of SceneSnapshot::curves[curveIndex], in
+/// one instanced call.
+struct CurveItem {
+    Mat4d worldTransform{Mat4Identity()};
+    Color color{0.75f, 0.76f, 0.78f, 1.0f};
+    float width{1.5f};  ///< Screen-space pixels.
+    LineStyle style{LineStyle::Solid};
+    uint32_t curveIndex{0};
 };
 
-/// What one vertex looks like once it reaches the GPU. Float, and in object
-/// space — the camera-relative offset rides on the per-draw model matrix, so
-/// the vertex data itself never has to be re-uploaded when the camera moves.
+/// One point-primitive draw: every position of SceneSnapshot::curves[index].
+struct PointItem {
+    Mat4d worldTransform{Mat4Identity()};
+    Color color{0.75f, 0.76f, 0.78f, 1.0f};
+    float size{6.0f};  ///< Screen-space pixels.
+    uint32_t curveIndex{0};
+};
+
+struct SceneSnapshot {
+    /// Bumped by the scene whenever anything the renderer cares about changed.
+    /// Equal revisions mean the data on the GPU is still current.
+    uint64_t revision{0};
+
+    /// Non-owning; the api layer keeps the geometry alive across the call.
+    std::vector<const geom::MeshData*> meshes;
+    /// Wire geometry, shared by both curve and point drawing: a curve's segments
+    /// become line instances and its vertices become point instances, so a Point
+    /// shape is just a wire with one vertex and no segments.
+    std::vector<const geom::PolylineData*> curves;
+
+    std::vector<DrawItem> items;
+    std::vector<CurveItem> curveItems;
+    std::vector<PointItem> pointItems;
+
+    void Clear() {
+        meshes.clear();
+        curves.clear();
+        items.clear();
+        curveItems.clear();
+        pointItems.clear();
+    }
+};
+
+/// What one shaded vertex looks like once it reaches the GPU. Float, and in
+/// object space — the camera-relative offset rides on the per-draw model matrix,
+/// so the vertex data itself never has to be re-uploaded when the camera moves.
 struct GpuVertex {
     float position[3];
     float normal[3];
+};
+
+/// One line segment, one instance. The arc lengths are what let the fragment
+/// shader phase a dash pattern along a whole curve rather than restarting it at
+/// every chord.
+struct GpuLineInstance {
+    float a[3];
+    float arcA;
+    float b[3];
+    float arcB;
+};
+
+/// One point primitive, one instance.
+struct GpuPointInstance {
+    float position[3];
 };
 
 class GpuScene {
@@ -48,6 +97,11 @@ public:
         int32_t vertexOffset;
     };
 
+    struct InstanceRange {
+        uint32_t firstInstance;
+        uint32_t instanceCount;
+    };
+
     /// Re-uploads when `snapshot.revision` has moved on, otherwise does
     /// nothing. Old buffers go through the delete queue because the GPU may
     /// still be reading them for a frame or two.
@@ -56,30 +110,51 @@ public:
 
     void Destroy(vk::Context& ctx);
 
-    bool HasGeometry() const { return !ranges_.empty() && vertices_.IsValid(); }
+    bool HasGeometry() const { return !meshRanges_.empty() && vertices_.IsValid(); }
+    bool HasLines() const { return lineInstances_.IsValid(); }
+    bool HasPoints() const { return pointInstances_.IsValid(); }
 
     VkBuffer VertexBuffer() const { return vertices_.handle; }
     VkBuffer IndexBuffer() const { return indices_.handle; }
+    VkBuffer LineInstanceBuffer() const { return lineInstances_.handle; }
+    VkBuffer PointInstanceBuffer() const { return pointInstances_.handle; }
 
-    /// Null when `meshIndex` is out of range or that mesh was empty.
+    /// Null when the index is out of range or that geometry was empty.
     const MeshRange* RangeFor(uint32_t meshIndex) const {
-        return meshIndex < ranges_.size() && ranges_[meshIndex].indexCount > 0
-                   ? &ranges_[meshIndex]
+        return meshIndex < meshRanges_.size() && meshRanges_[meshIndex].indexCount > 0
+                   ? &meshRanges_[meshIndex]
+                   : nullptr;
+    }
+    const InstanceRange* LineRangeFor(uint32_t curveIndex) const {
+        return curveIndex < lineRanges_.size() && lineRanges_[curveIndex].instanceCount > 0
+                   ? &lineRanges_[curveIndex]
+                   : nullptr;
+    }
+    const InstanceRange* PointRangeFor(uint32_t curveIndex) const {
+        return curveIndex < pointRanges_.size() && pointRanges_[curveIndex].instanceCount > 0
+                   ? &pointRanges_[curveIndex]
                    : nullptr;
     }
 
     uint32_t TriangleCount() const { return triangleCount_; }
+    uint32_t SegmentCount() const { return segmentCount_; }
 
 private:
     void Retire(vk::Context& ctx, vk::DeleteQueue& deleteQueue, uint64_t frame);
 
     vk::Buffer vertices_;
     vk::Buffer indices_;
-    std::vector<MeshRange> ranges_;
+    vk::Buffer lineInstances_;
+    vk::Buffer pointInstances_;
+
+    std::vector<MeshRange> meshRanges_;
+    std::vector<InstanceRange> lineRanges_;
+    std::vector<InstanceRange> pointRanges_;
 
     uint64_t uploadedRevision_{0};
     bool everUploaded_{false};
     uint32_t triangleCount_{0};
+    uint32_t segmentCount_{0};
 };
 
 } // namespace cadgeom::render

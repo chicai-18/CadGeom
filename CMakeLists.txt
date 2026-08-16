@@ -121,8 +121,17 @@ set(CADGEOM_SOURCES
     src/core/Log.cpp
     src/core/ObjectTracker.cpp
     src/core/Png.cpp
+    src/geom/Curve.cpp
+    src/geom/Kernel.cpp
     src/geom/MeshData.cpp
+    src/geom/Tessellate.cpp
     src/interact/OrbitCamera.cpp
+    src/interact/OverlayBuilder.cpp
+    src/interact/ToolContext.cpp
+    src/interact/WorkPlane.cpp
+    src/interact/tools/DrawTools.cpp
+    src/interact/tools/ToolBase.cpp
+    src/api/Commands.cpp
     src/api/CommandStackImpl.cpp
     src/api/EngineImpl.cpp
     src/api/EntityImpl.cpp
@@ -143,7 +152,9 @@ set(CADGEOM_RENDER_SOURCES
     src/render/RenderSystem.cpp
     src/render/Surface.cpp
     src/render/pass/GridPass.cpp
+    src/render/pass/LinePass.cpp
     src/render/pass/MeshPass.cpp
+    src/render/pass/PointPass.cpp
     src/render/vk/Common.cpp
     src/render/vk/Context.cpp
     src/render/vk/Pipeline.cpp
@@ -155,7 +166,11 @@ set(CADGEOM_SHADERS
     shaders/grid.vert
     shaders/grid.frag
     shaders/mesh.vert
-    shaders/mesh.frag)
+    shaders/mesh.frag
+    shaders/line.vert
+    shaders/line.frag
+    shaders/point.vert
+    shaders/point.frag)
 
 if(CADGEOM_ENABLE_VULKAN)
     list(APPEND CADGEOM_SOURCES ${CADGEOM_RENDER_SOURCES})

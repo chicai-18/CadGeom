@@ -35,9 +35,18 @@ double NiceSpacing(double desired) {
 } // namespace
 
 ViewportImpl::ViewportImpl(EngineImpl& engine, std::unique_ptr<render::Surface> surface)
-    : engine_(engine), surface_(std::move(surface)) {}
+    : engine_(engine),
+      surface_(std::move(surface)),
+      toolContext_(engine.Scene(), *this, camera_, engine.Tools().Settings()),
+      overlayBuilder_(overlay_) {}
 
 ViewportImpl::~ViewportImpl() {
+    // The tool manager may still be pointing at this viewport's context, which
+    // is about to stop existing.
+    if (engine_.Tools().Context() == &toolContext_) {
+        engine_.Tools().SetContext(nullptr);
+    }
+
     // Order matters: the renderer holds a VkSurfaceKHR made from the window, so
     // it has to be gone before the window is.
     renderer_.Shutdown();
@@ -176,13 +185,64 @@ uint32_t ViewportImpl::GetPickFilter() const {
 // Input
 // ---------------------------------------------------------------------------
 
-bool ViewportImpl::OnMouseEvent(const MouseEvent& e) {
-    // From M2 the active tool sees the event first and the camera only gets
-    // what the tool declines.
-    return HandleCameraMouse(e);
+ITool* ViewportImpl::ActiveTool() {
+    // Set every time rather than once at construction: the manager holds a
+    // single context slot, and with two viewports open the right one is
+    // whichever is dispatching now.
+    engine_.Tools().SetContext(&toolContext_);
+    toolContext_.SetGridSpacing(GridSpacing());
+    return engine_.Tools().GetActiveToolInterface();
 }
 
-bool ViewportImpl::HandleCameraMouse(const MouseEvent& e) {
+bool ViewportImpl::OnMouseEvent(const MouseEvent& e) {
+    // Track the cursor here rather than inside the camera handler, so a tool
+    // consuming a move does not leave the camera with a stale origin and a
+    // one-frame jump the next time a drag starts.
+    const double dx = e.x - lastMouseX_;
+    const double dy = e.y - lastMouseY_;
+    if (e.action == MouseAction::Move) {
+        lastMouseX_ = e.x;
+        lastMouseY_ = e.y;
+    }
+
+    // A drag in progress owns the mouse until it ends, whatever else wants it.
+    const bool cameraGesture = dragging_ || e.action == MouseAction::Wheel ||
+                               e.button == MouseButton::Middle || e.button == MouseButton::Right;
+
+    if (!cameraGesture) {
+        if (ITool* tool = ActiveTool()) {
+            ToolResult result = ToolResult::Ignored;
+            switch (e.action) {
+                case MouseAction::Down:
+                case MouseAction::DoubleClick:
+                    // Both land on OnMouseDown; the event says which it was, so
+                    // a tool that ends on a double-click can tell and the rest
+                    // do not have to care.
+                    result = tool->OnMouseDown(e, &toolContext_);
+                    break;
+                case MouseAction::Move:
+                    result = tool->OnMouseMove(e, &toolContext_);
+                    break;
+                case MouseAction::Up:
+                    result = tool->OnMouseUp(e, &toolContext_);
+                    break;
+                default:
+                    break;
+            }
+            if (result == ToolResult::Finished) {
+                engine_.Tools().Cancel();
+                return true;
+            }
+            if (result != ToolResult::Ignored) {
+                return true;
+            }
+        }
+    }
+
+    return HandleCameraMouse(e, dx, dy);
+}
+
+bool ViewportImpl::HandleCameraMouse(const MouseEvent& e, double dx, double dy) {
     switch (e.action) {
         case MouseAction::Down:
             // Middle drag orbits, shift+middle pans, right drag pans — the
@@ -206,10 +266,6 @@ bool ViewportImpl::HandleCameraMouse(const MouseEvent& e) {
             return false;
 
         case MouseAction::Move: {
-            const double dx = e.x - lastMouseX_;
-            const double dy = e.y - lastMouseY_;
-            lastMouseX_ = e.x;
-            lastMouseY_ = e.y;
             if (!dragging_) {
                 return false;
             }
@@ -242,7 +298,44 @@ bool ViewportImpl::HandleCameraMouse(const MouseEvent& e) {
 }
 
 bool ViewportImpl::OnKeyEvent(const KeyEvent& e) {
-    return HandleCameraKey(e);
+    if (ITool* tool = ActiveTool()) {
+        const ToolResult result = tool->OnKey(e, &toolContext_);
+        if (result == ToolResult::Finished) {
+            engine_.Tools().Cancel();
+            return true;
+        }
+        if (result != ToolResult::Ignored) {
+            return true;
+        }
+    }
+    return HandleToolKey(e) || HandleCameraKey(e);
+}
+
+bool ViewportImpl::HandleToolKey(const KeyEvent& e) {
+    if (e.action == KeyAction::Up) {
+        return false;
+    }
+
+    // Escape always gets back to Select, even when the active tool declined it —
+    // it is the one binding a user reaches for when they are lost.
+    if (e.key == Key_Escape) {
+        engine_.Tools().Cancel();
+        return true;
+    }
+
+    ToolId id = ToolId::None;
+    switch (e.key) {
+        case 'V': id = ToolId::Select;    break;
+        case 'X': id = ToolId::Point;     break;
+        case 'L': id = ToolId::Line;      break;
+        case 'C': id = ToolId::Circle;    break;
+        case 'R': id = ToolId::Rectangle; break;
+        case 'Y': id = ToolId::Polyline;  break;
+        default: return false;
+    }
+
+    engine_.Tools().SetContext(&toolContext_);
+    return CgSucceeded(engine_.Tools().Activate(id));
 }
 
 bool ViewportImpl::HandleCameraKey(const KeyEvent& e) {
@@ -282,6 +375,10 @@ bool ViewportImpl::HandleCameraKey(const KeyEvent& e) {
 // Frame
 // ---------------------------------------------------------------------------
 
+double ViewportImpl::GridSpacing() const {
+    return NiceSpacing(camera_.PixelWorldSizeAtTarget() * kMinPixelsPerGridCell);
+}
+
 render::RenderView ViewportImpl::BuildRenderView() const {
     render::RenderView view{};
     view.viewProj = camera_.ViewProjectionRelative();
@@ -300,7 +397,9 @@ render::RenderView ViewportImpl::BuildRenderView() const {
                                camera_.Right() * 0.35);
 
     const double worldPerPixel = camera_.PixelWorldSizeAtTarget();
-    view.gridSpacing = NiceSpacing(worldPerPixel * kMinPixelsPerGridCell);
+    view.gridSpacing = GridSpacing();
+    // What the line and point passes scale their screen-space expansion by.
+    view.pixelWorldSize = worldPerPixel;
 
     // Fade relative to how much world the viewport covers, so the grid always
     // fills a similar fraction of the screen no matter the zoom.
@@ -324,7 +423,18 @@ CgResult ViewportImpl::Render() {
     if (CgFailed(sync)) {
         return sync;
     }
-    return renderer_.Render(BuildRenderView(), engine_.Snapshot());
+
+    // The preview is rebuilt from scratch every frame from the tool's current
+    // state, which is what keeps it out of the scene and out of the undo stack.
+    overlay_.Clear();
+    if (ITool* tool = ActiveTool()) {
+        TessParams tess{};
+        engine_.Scene().GetGeometryBuilder()->GetTessParams(tess);
+        overlayBuilder_.SetTessParams(tess);
+        tool->BuildPreview(&overlayBuilder_, &toolContext_);
+    }
+
+    return renderer_.Render(BuildRenderView(), engine_.Snapshot(), overlay_);
 }
 
 CgResult ViewportImpl::SaveScreenshot(const char* utf8Path) {

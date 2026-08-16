@@ -314,6 +314,79 @@ inline Mat4d ToMatrix(const Transform& t) {
     return r;
 }
 
+/// The inverse of ToMatrix(): splits a matrix back into translation, rotation
+/// and scale.
+///
+/// False when the matrix is not a TRS — a mirror or a shear has no quaternion,
+/// and returning a plausible-looking wrong answer would be worse than saying so.
+/// Callers that reparent an entity rely on that distinction.
+inline bool Decompose(const Mat4d& m, Transform& out) {
+    Vec3d columns[3] = {Vec3d{m.m[0], m.m[1], m.m[2]}, Vec3d{m.m[4], m.m[5], m.m[6]},
+                        Vec3d{m.m[8], m.m[9], m.m[10]}};
+    const double sx = Length(columns[0]);
+    const double sy = Length(columns[1]);
+    const double sz = Length(columns[2]);
+    if (sx < kEpsilon || sy < kEpsilon || sz < kEpsilon) {
+        return false;
+    }
+
+    columns[0] = columns[0] / sx;
+    columns[1] = columns[1] / sy;
+    columns[2] = columns[2] / sz;
+
+    // A negative determinant means a mirror, which no rotation can express.
+    if (Dot(Cross(columns[0], columns[1]), columns[2]) < 0.0) {
+        return false;
+    }
+    // Non-orthogonal axes mean shear. The tolerance is loose enough to accept
+    // the drift of a long chain of composed rotations.
+    constexpr double kOrthoTolerance = 1e-6;
+    if (std::fabs(Dot(columns[0], columns[1])) > kOrthoTolerance ||
+        std::fabs(Dot(columns[0], columns[2])) > kOrthoTolerance ||
+        std::fabs(Dot(columns[1], columns[2])) > kOrthoTolerance) {
+        return false;
+    }
+
+    out.translation = Vec3d{m.m[12], m.m[13], m.m[14]};
+    out.scale = Vec3d{sx, sy, sz};
+
+    // Shepperd's method: pick the largest of the four diagonal combinations so
+    // the square root never runs into a near-zero denominator.
+    const double r00 = columns[0].x, r01 = columns[1].x, r02 = columns[2].x;
+    const double r10 = columns[0].y, r11 = columns[1].y, r12 = columns[2].y;
+    const double r20 = columns[0].z, r21 = columns[1].z, r22 = columns[2].z;
+    const double trace = r00 + r11 + r22;
+
+    Quatd q{};
+    if (trace > 0.0) {
+        const double s = 0.5 / std::sqrt(trace + 1.0);
+        q.w = 0.25 / s;
+        q.x = (r21 - r12) * s;
+        q.y = (r02 - r20) * s;
+        q.z = (r10 - r01) * s;
+    } else if (r00 > r11 && r00 > r22) {
+        const double s = 2.0 * std::sqrt(1.0 + r00 - r11 - r22);
+        q.w = (r21 - r12) / s;
+        q.x = 0.25 * s;
+        q.y = (r01 + r10) / s;
+        q.z = (r02 + r20) / s;
+    } else if (r11 > r22) {
+        const double s = 2.0 * std::sqrt(1.0 + r11 - r00 - r22);
+        q.w = (r02 - r20) / s;
+        q.x = (r01 + r10) / s;
+        q.y = 0.25 * s;
+        q.z = (r12 + r21) / s;
+    } else {
+        const double s = 2.0 * std::sqrt(1.0 + r22 - r00 - r11);
+        q.w = (r10 - r01) / s;
+        q.x = (r02 + r20) / s;
+        q.y = (r12 + r21) / s;
+        q.z = 0.25 * s;
+    }
+    out.rotation = Normalized(q);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Aabb
 // ---------------------------------------------------------------------------

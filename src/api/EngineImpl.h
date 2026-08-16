@@ -8,7 +8,6 @@
 #include "core/ObjectTracker.h"
 
 #if CADGEOM_HAS_VULKAN
-#include "geom/MeshData.h"
 #include "render/GpuScene.h"
 #include "render/RenderSystem.h"
 #endif
@@ -52,6 +51,7 @@ public:
     // -- Engine-side access -------------------------------------------------
 
     SceneImpl& Scene() { return scene_; }
+    ToolManagerImpl& Tools() { return tools_; }
     bool ValidationEnabled() const { return validation_; }
     uint64_t FrameIndex() const { return frameIndex_; }
 
@@ -73,6 +73,8 @@ public:
 private:
 #if CADGEOM_HAS_VULKAN
     void UpdateSnapshot();
+    /// An entity is drawn only when it and every ancestor is visible.
+    bool IsEffectivelyVisible(EntityId entity) const;
 #endif
 
     core::ObjectTracker tracker_;
@@ -97,11 +99,6 @@ private:
     render::SceneSnapshot snapshot_;
     uint64_t snapshotRevision_{0};
     bool snapshotValid_{false};
-
-    /// M1 has a renderer but no kernel, so there is nothing in the scene to
-    /// draw yet. This stands in until M2 fills the scene with real tessellated
-    /// geometry, and disappears on its own the moment anything real shows up.
-    geom::MeshData placeholderMesh_;
 #endif
 };
 

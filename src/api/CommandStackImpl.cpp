@@ -60,6 +60,18 @@ private:
     std::vector<ICommand*> children_;
 };
 
+class CommandStackImpl::Running {
+public:
+    explicit Running(uint32_t& depth) : depth_(depth) { ++depth_; }
+    ~Running() { --depth_; }
+
+    Running(const Running&) = delete;
+    Running& operator=(const Running&) = delete;
+
+private:
+    uint32_t& depth_;
+};
+
 CommandStackImpl::CommandStackImpl(SceneImpl& scene) : scene_(scene) {}
 
 CommandStackImpl::~CommandStackImpl() {
@@ -76,6 +88,18 @@ CgResult CommandStackImpl::Push(ICommand* command) {
         return core::SetError(CgResult::InvalidArgument, "Push: command is null");
     }
 
+    if (running_ > 0) {
+        // Re-entrant. Something the stack is already running asked for another
+        // edit — a host command whose Undo() calls IScene::DestroyEntity, say.
+        // That edit belongs to the entry already on the stack, so it runs and is
+        // released rather than becoming a second entry the user never made. The
+        // alternative is mutating undo_/redo_ underneath the loop walking them.
+        const CgResult nested = command->Execute(scene_.AsInterface());
+        command->Release();
+        return nested;
+    }
+
+    const Running guard(running_);
     const CgResult result = command->Execute(scene_.AsInterface());
     if (CgFailed(result)) {
         // Contract: a failed command owns nothing and changes nothing.
@@ -113,7 +137,11 @@ CgResult CommandStackImpl::Undo() {
     }
 
     ICommand* command = undo_.back();
-    const CgResult result = command->Undo(scene_.AsInterface());
+    CgResult result = CgResult::Ok;
+    {
+        const Running guard(running_);
+        result = command->Undo(scene_.AsInterface());
+    }
     if (CgFailed(result)) {
         // Leave it on the stack: the scene state is unknown, and silently
         // dropping the entry would make it unrecoverable.
@@ -135,7 +163,11 @@ CgResult CommandStackImpl::Redo() {
     }
 
     ICommand* command = redo_.back();
-    const CgResult result = command->Execute(scene_.AsInterface());
+    CgResult result = CgResult::Ok;
+    {
+        const Running guard(running_);
+        result = command->Execute(scene_.AsInterface());
+    }
     if (CgFailed(result)) {
         return core::SetError(result, "Redo: '%s' failed", command->GetName());
     }

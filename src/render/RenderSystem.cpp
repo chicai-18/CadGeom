@@ -38,6 +38,16 @@ CgResult RenderSystem::Initialize(const char* applicationName, bool enableValida
         Shutdown();
         return r;
     }
+    r = lines_.Initialize(context_, pipelineLayout_);
+    if (CgFailed(r)) {
+        Shutdown();
+        return r;
+    }
+    r = points_.Initialize(context_, pipelineLayout_);
+    if (CgFailed(r)) {
+        Shutdown();
+        return r;
+    }
     return CgResult::Ok;
 }
 
@@ -58,11 +68,13 @@ CgResult RenderSystem::CreateLayouts() {
 
     // One layout for every pass. The grid never reads the push constants, but
     // sharing a layout means the descriptor set survives a pipeline change and
-    // is bound once per frame instead of once per pass.
+    // is bound once per frame instead of once per pass. The range is the full
+    // 128 bytes every Vulkan device guarantees, so a new pass with a bigger
+    // push block never has to renegotiate it.
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushRange.offset = 0;
-    pushRange.size = sizeof(MeshPushConstants);
+    pushRange.size = kPushConstantBytes;
 
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -93,6 +105,8 @@ void RenderSystem::Shutdown() {
     deletions_.FlushAll();
 
     geometry_.Destroy(context_);
+    points_.Shutdown(context_);
+    lines_.Shutdown(context_);
     mesh_.Shutdown(context_);
     grid_.Shutdown(context_);
 

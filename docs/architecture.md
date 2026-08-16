@@ -461,7 +461,7 @@ install/
 |---|---|---|
 | **M0 骨架** ✅ | CMake 工程、submodules、导出宏、`ICadEngine` 空实现、`cadgeom.dll` + demo 链接通过 | demo 能 create/release engine，无泄漏 |
 | **M1 Vulkan 起飞** ✅ | Context/Swapchain/RHI/Renderer、`GridPass`+`MeshPass`、OrbitCamera、ISurface 三后端（Glfw / Win32 / Headless） | 窗口里出现可旋转的网格地面 + 一个立方体 |
-| **M2 几何与线条** | 内核 + 点/线/圆/矩形、`LinePass`(屏幕空间)、`PointPass`、Tool 状态机、WorkPlane | 鼠标能交互画出点/线/圆/矩形，线宽正确、虚线可用 |
+| **M2 几何与线条** ✅ | 内核 + 点/线/圆/矩形、`LinePass`(屏幕空间)、`PointPass`、Tool 状态机、WorkPlane | 鼠标能交互画出点/线/圆/矩形，线宽正确、虚线可用 |
 | **M3 选择与操作** | BVH、Picker（点/边/面优先级）、Selection 高亮、Gizmo、CommandStack | 能选中、拖动、旋转，Ctrl+Z/Y 正常 |
 | **M4 拉伸成体** | Profile 三角化、Extrude + Topology、`EdgePass`、`ExtrudeTool` | 圆→圆柱、矩形→立方体，交互式拖拽高度，带轮廓黑边 |
 | **M5 数据 IO** | IoRegistry、OBJ 读写、glTF 读写、`extras` 参数化往返 | 导出再导入，参数化信息不丢；Blender 能正常打开 |

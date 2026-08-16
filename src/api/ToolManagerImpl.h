@@ -3,6 +3,7 @@
 #include <cadgeom/ITool.h>
 
 #include "core/ObjectTracker.h"
+#include "interact/ToolContext.h"
 
 #include <unordered_map>
 
@@ -10,13 +11,13 @@ namespace cadgeom::api {
 
 class EngineImpl;
 
-/// Registration, ownership and the active-tool slot are real as of M0; the
-/// built-in tools and the event dispatch that feeds them need a viewport to
-/// supply the IToolContext, so they arrive with M1/M2
-/// (docs/architecture.md §6.2).
+/// Owns the built-in tools, whatever the host has registered, and the one
+/// active-tool slot (docs/architecture.md §6.2).
 ///
-/// A host can register its own ITool today and it will be owned, activated and
-/// released correctly.
+/// The context comes from whichever viewport is currently dispatching, because
+/// half of what a tool asks for is a property of the view it is being driven
+/// from. Everything that is *not* per-view — continuous mode, the snap mask —
+/// lives in `settings_` and is read by the tools directly.
 class ToolManagerImpl final : public IToolManager {
 public:
     explicit ToolManagerImpl(EngineImpl& engine);
@@ -37,11 +38,16 @@ public:
     void SetContinuousMode(bool enabled) override;
     bool IsContinuousMode() const override;
 
-    double GetSnapTolerance() const { return snapTolerance_; }
+    /// The engine-global half of a tool's state. Lives here because it is set
+    /// through IToolManager and applies to every viewport; the built-in tools
+    /// hold a reference to it for the lifetime of the manager.
+    const interact::ToolSettings& Settings() const { return settings_; }
 
-    /// Installed by a viewport once one exists; until then Activate() records
-    /// the choice without calling into the tool.
+    /// Installed by whichever viewport is about to dispatch. Switching contexts
+    /// re-activates the current tool, so a tool always knows which view it is
+    /// being driven from.
     void SetContext(IToolContext* context);
+    IToolContext* Context() { return context_; }
 
 private:
     ITool* Find(ToolId id) const;
@@ -54,9 +60,7 @@ private:
     ITool* active_{nullptr};
     IToolContext* context_{nullptr};
 
-    uint32_t snapMask_{Snap_Endpoint | Snap_Midpoint | Snap_Center | Snap_Intersection};
-    double snapTolerance_{8.0};
-    bool continuous_{false};
+    interact::ToolSettings settings_{};
 };
 
 } // namespace cadgeom::api

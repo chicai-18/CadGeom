@@ -252,9 +252,15 @@ TEST_CASE("the tool manager owns registered tools", "[tools]") {
         cgtest::EngineFixture fixture;
         IToolManager& tools = *fixture.Engine().GetToolManager();
 
-        CHECK(tools.GetActiveTool() == ToolId::None);
-        // The built-in tools are M2 work; asking for one says so.
-        CHECK(tools.Activate(ToolId::Circle) == CgResult::NotImplemented);
+        // A fresh engine registers the built-ins and starts on Select.
+        CHECK(tools.GetActiveTool() == ToolId::Select);
+        CHECK(CgSucceeded(tools.Activate(ToolId::Circle)));
+
+        // Tools that need picking or solids say which milestone brings them.
+        CHECK(tools.Activate(ToolId::Move) == CgResult::NotImplemented);
+        CHECK(tools.Activate(ToolId::Extrude) == CgResult::NotImplemented);
+        // An id nobody registered is simply not there.
+        CHECK(tools.Activate(static_cast<ToolId>(0x2000)) == CgResult::NotFound);
 
         REQUIRE(CgSucceeded(tools.RegisterTool(new NoopTool(ledger))));
         REQUIRE(CgSucceeded(tools.Activate(ToolId::Custom)));
@@ -262,6 +268,7 @@ TEST_CASE("the tool manager owns registered tools", "[tools]") {
         CHECK(tools.GetActiveToolInterface() != nullptr);
 
         CHECK(tools.RegisterTool(nullptr) == CgResult::InvalidArgument);
+        CHECK(CgSucceeded(tools.UnregisterTool(ToolId::Line)));
         CHECK(tools.UnregisterTool(ToolId::Line) == CgResult::NotFound);
 
         tools.SetSnapMask(Snap_Grid);

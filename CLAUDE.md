@@ -7,28 +7,26 @@ break by accident.
 
 ## Current state
 
-Milestone **M1 complete** (Vulkan renderer). See `docs/architecture.md` §9 for
-the plan.
+Milestone **M2 complete** (geometry kernel, lines and tools). See
+`docs/architecture.md` §9 for the plan.
 
 | | Status |
 |---|---|
 | Public headers (`include/cadgeom/`) | Complete — the contract is frozen from here |
 | Engine lifecycle, scene graph, selection, undo stack, IO registry | Working |
-| Vulkan context/swapchain/RHI, `GridPass` + `MeshPass`, orbit camera, screenshots | Working |
+| Vulkan context/swapchain/RHI, orbit camera, screenshots | Working |
+| `GridPass` `MeshPass` `LinePass` `PointPass` + overlay previews | Working |
 | `ISurface`: GLFW, native Win32, headless | Working (X11/Wayland/Cocoa report `NotSupported`) |
-| Geometry kernel, tessellation, line/point passes, tools | **M2** — creation calls return `NotImplemented` |
-| BVH, picking, gizmos | **M3** — `Pick`, `Raycast`, `SetWorkPlaneFromPick` return `NotImplemented` |
-| Extrude, topology, `EdgePass` | **M4** |
+| `SimpleKernel`: point/line/circle/arc/rectangle/polyline, tessellation, bounds | Working |
+| WorkPlane, `IToolContext`, Select/Point/Line/Circle/Rectangle/Polyline tools | Working |
+| BVH, picking, gizmos, snapping to geometry | **M3** — `Pick`, `Raycast`, `SetWorkPlaneFromPick` return `NotImplemented`; only `Snap_Grid` works |
+| Extrude, topology, `EdgePass` | **M4** — `Extrude` returns `NotImplemented` |
 | OBJ / glTF handlers | **M5** |
-| MSAA, snapping, ImGui panels | **M6** — `ViewportDesc::sampleCount` is ignored with a warning |
+| MSAA, ImGui panels, overlay text | **M6** — `ViewportDesc::sampleCount` is ignored with a warning |
 
 Anything not built yet fails with `CgResult::NotImplemented` and an error
 message naming the milestone. Keep that habit: a host wiring itself up against
 these headers should never have to guess whether it hit a bug or a gap.
-
-Until the kernel lands there is nothing in a scene to draw, so `MeshPass` falls
-back to a placeholder cube (`EngineImpl::UpdateSnapshot`). It disappears on its
-own as soon as the snapshot contains a real mesh — do not build on it.
 
 ## The ABI rules — breaking one of these plants a landmine
 
@@ -62,6 +60,12 @@ these hold (`docs/architecture.md` §2.2):
 `Types.h` is under the same freeze: hosts compile those layouts into their own
 code. Adding a field to an existing struct is a breaking change.
 
+One consequence already bites: `ShapeParams` is a POD union with nowhere to put
+a polyline's variable-length point list. `GetParams` on a polyline therefore
+returns its `type` and an unused union, and `SetParams` returns `NotSupported`.
+The kernel's own `geom::ShapeDef` carries the points; that is the internal type
+and it is free to hold STL.
+
 ## Layering
 
 ```
@@ -74,9 +78,18 @@ unit-testable without standing up a Vulkan device — and `tests/` must stay
 Vulkan-free for the same reason. A test may create an engine, but it must never
 create a Glfw or Headless viewport: that would build a device.
 
-`render/` is fed a `render::SceneSnapshot` (meshes plus draw items, still in
+`render/` is fed a `render::SceneSnapshot` (geometry plus draw items, still in
 double) built by `api/`, rather than reaching up into the scene graph itself.
-That indirection is what keeps the arrow pointing down.
+Preview geometry arrives the same way, as a `render::OverlayData` filled by
+`interact::OverlayBuilder`. Both types live in `render/` because render/ is the
+consumer and sits *below* the layers that fill them — that is the arrow pointing
+down, not a violation of it.
+
+The built-in tools reach the scene through the **public** interfaces
+(`IScene`, `IGeometryBuilder`, `ISelection`), never through `api/*Impl`. That is
+what keeps `interact/ → api/` from becoming a cycle, and it means a tool can only
+do what a host-written tool could do. Whatever a tool needs that `IToolContext`
+does not carry goes in `interact::ToolSettings`, which the tool manager owns.
 
 ## Conventions
 
@@ -94,9 +107,27 @@ That indirection is what keeps the arrow pointing down.
   `ViewportDesc` and `EntityStyle` are linear — a "dark grey" background is
   around 0.04, not 0.2.
 - **Parameters are the source of truth**; meshes are a derived cache. Only
-  `Tessellate` writes a mesh. Changing a radius regenerates geometry — it never
-  edits triangles.
-- **Every scene mutation goes through `ICommand`** so undo/redo stays free.
+  `Tessellate` writes a mesh or a wire. Changing a radius marks the cache dirty
+  and re-tessellates — it never edits triangles. Anything that invalidates a
+  cache must also bump the scene revision, or the renderer keeps drawing the old
+  geometry.
+- **Every scene mutation goes through `ICommand`** so undo/redo stays free —
+  including delete. Two consequences worth knowing:
+  - A command that runs *while the stack is running one* (a host `Undo()` that
+    calls `IScene::DestroyEntity`, say) is executed and released rather than
+    recorded. `CommandStackImpl::Push` guards this; without it the nested push
+    mutates the vector the outer call is walking.
+  - Undo re-creates an entity under **the same `EntityId`**
+    (`SceneImpl::CreateEntityInternal`'s `preferredId`). Anything else holding
+    that id would otherwise be left pointing at nothing.
+- **An entity owns its shape.** Destroying one hands the shape back to the
+  kernel; an undoable delete calls `DetachShape()` first and takes ownership
+  until it falls off the stack.
+- **Lines and points are expanded to screen-space quads in the vertex shader**,
+  never `VK_POLYGON_MODE_LINE`. `wideLines` is optional, most drivers clamp to
+  1.0, and neither can dash. Dash phase comes from per-segment arc length times
+  `lineParams.x` (pixels per world unit), which is exact in orthographic and
+  approximate in perspective.
 - Angles are radians unless the name says `Deg`.
 - Every impl object embeds a `core::ObjectTracker`; `CadGeom_GetLiveObjectCount()`
   must return to its baseline after teardown. The tests and the demo both assert
@@ -111,18 +142,26 @@ cmake --build build --config Debug --parallel
 ctest --test-dir build -C Debug --output-on-failure
 build/bin/Debug/glfw_viewer.exe
 
-# No display, or checking a render change without eyeballing a window:
+# No display, or checking a render change without eyeballing a window. The
+# headless run also drives the tools through synthetic mouse events, so the
+# interactive path is checked without a hand on the mouse.
 build/bin/Debug/glfw_viewer.exe --headless --screenshot shot.png
+build/bin/Debug/glfw_viewer.exe --headless --perspective --screenshot iso.png
 build/bin/Debug/glfw_viewer.exe --perspective --frames 300
 ```
 
 Targets: `cadgeom` (the only shipped artifact), `cadgeom_tests`, `glfw_viewer`.
 
+In the window, `V X L C R Y` pick the Select/Point/Line/Circle/Rectangle/
+Polyline tools and Esc cancels. Those bindings live in `ViewportImpl` rather than
+in the demo because with `SurfaceKind::Glfw` the *engine* owns the window, so the
+host never sees the key.
+
 The Vulkan SDK is the one dependency not vendored. Without it — or without
 `glslc`, since the shaders are compiled into the DLL — the build drops the
-renderer and says so; everything through M0 still builds and runs. The renderer
-needs LunarG >= 1.3.275 with `VULKAN_SDK` set. A driver-provided `vulkan-1.dll`
-is *not* the SDK.
+renderer and says so; the kernel, the scene, the tools and the whole test suite
+still build and run. The renderer needs LunarG >= 1.3.275 with `VULKAN_SDK` set.
+A driver-provided `vulkan-1.dll` is *not* the SDK.
 
 Shaders live in `shaders/` and are compiled to SPIR-V and embedded as C arrays
 by `cmake/CadGeomShaders.cmake`. Editing a `.glsl` include only triggers a

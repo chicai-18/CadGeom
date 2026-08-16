@@ -4,6 +4,26 @@
 #include "core/Log.h"
 
 namespace cadgeom::api {
+namespace {
+
+/// Which milestone brings a built-in that is not here yet. Null when the id is
+/// simply not one of ours, which for a host id means "you never registered it".
+const char* PendingMilestone(ToolId id) {
+    switch (id) {
+        case ToolId::Extrude:
+            return "M4, with profile triangulation and solid topology";
+        case ToolId::Move:
+        case ToolId::Rotate:
+        case ToolId::Scale:
+            return "M3, with picking and the transform gizmo";
+        case ToolId::Measure:
+            return "M6, with snapping and the on-screen readout";
+        default:
+            return nullptr;
+    }
+}
+
+} // namespace
 
 ToolManagerImpl::ToolManagerImpl(EngineImpl& engine) : engine_(engine) {}
 
@@ -34,10 +54,17 @@ CgResult ToolManagerImpl::Activate(ToolId id) {
 
     ITool* tool = Find(id);
     if (!tool) {
-        return core::SetError(
-            CgResult::NotImplemented,
-            "no tool registered for id %d; the built-in tools arrive in milestone M2",
-            static_cast<int>(id));
+        if (const char* milestone = PendingMilestone(id)) {
+            return core::SetError(CgResult::NotImplemented, "the %s tool arrives in milestone %s",
+                                  id == ToolId::Extrude  ? "Extrude"
+                                  : id == ToolId::Move   ? "Move"
+                                  : id == ToolId::Rotate ? "Rotate"
+                                  : id == ToolId::Scale  ? "Scale"
+                                                         : "Measure",
+                                  milestone);
+        }
+        return core::SetError(CgResult::NotFound, "no tool registered for id %d",
+                              static_cast<int>(id));
     }
 
     if (active_ == tool) {
@@ -133,28 +160,38 @@ CgResult ToolManagerImpl::UnregisterTool(ToolId id) {
 }
 
 void ToolManagerImpl::SetSnapMask(uint32_t snapMask) {
-    snapMask_ = snapMask;
+    settings_.snapMask = snapMask;
 }
 
 uint32_t ToolManagerImpl::GetSnapMask() const {
-    return snapMask_;
+    return settings_.snapMask;
 }
 
 void ToolManagerImpl::SetSnapTolerance(double pixels) {
     if (pixels > 0.0) {
-        snapTolerance_ = pixels;
+        settings_.tolerancePixels = pixels;
     }
 }
 
 void ToolManagerImpl::SetContinuousMode(bool enabled) {
-    continuous_ = enabled;
+    settings_.continuous = enabled;
 }
 
 bool ToolManagerImpl::IsContinuousMode() const {
-    return continuous_;
+    return settings_.continuous;
 }
 
 void ToolManagerImpl::SetContext(IToolContext* context) {
+    if (context_ == context) {
+        return;  // Called before every dispatch; the common case is no change.
+    }
+    // The old context is going away as far as the tool is concerned, so it gets
+    // the same courtesy as a tool switch: drop the half-built gesture rather
+    // than carry it into a different view with a different camera.
+    if (active_ && context_) {
+        active_->OnCancel(context_);
+        active_->OnDeactivate(context_);
+    }
     context_ = context;
     if (active_ && context_) {
         active_->OnActivate(context_);

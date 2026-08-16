@@ -17,6 +17,7 @@ layout(set = 0, binding = 0) uniform SceneBlock {
     vec4 gridParams;   // x: minor spacing  y: ground plane z  z: fade start  w: fade end
     vec4 gridOffset;   // xy: camera origin folded into one major cell  zw: camera origin XY
     vec4 focusRel;     // xyz: what the camera is looking at, camera-relative
+    vec4 lineParams;   // x: pixels per world unit  yz: viewport size in pixels
 } scene;
 
 #endif // CADGEOM_COMMON_GLSL

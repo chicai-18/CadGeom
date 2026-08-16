@@ -1,14 +1,18 @@
-// CadGeom demo host — milestones M0 and M1.
+// CadGeom demo host — milestones M0 through M2.
 //
 // Two phases, deliberately separate:
 //
-//   1. A pass over the public surface with no GPU in sight. This is M0's
-//      acceptance test — create, exercise, release, prove nothing leaked — and
-//      it is bracketed by a CRT heap checkpoint, so it has to stay free of
-//      anything that allocates behind the engine's back.
-//   2. A viewport: a window, a grid, an orbit camera and a shaded solid. Run
-//      with --headless it renders off-screen and writes a PNG instead, which is
-//      how the renderer gets verified on a machine with no display.
+//   1. A pass over the public surface with no GPU in sight: the scene graph, the
+//      geometry kernel, undo. This is M0's acceptance test — create, exercise,
+//      release, prove nothing leaked — and it is bracketed by a CRT heap
+//      checkpoint, so it has to stay free of anything that allocates behind the
+//      engine's back.
+//   2. A viewport: a window, a grid, an orbit camera, a drawing made of points,
+//      lines, circles and rectangles, and the tools that create them. Run with
+//      --headless it renders off-screen and writes a PNG instead, which is how
+//      the renderer gets verified on a machine with no display — and it drives
+//      the tools through synthetic mouse events, so interactive creation is
+//      checked there too rather than only by hand.
 //
 // Note what this file does *not* link: GLFW. The window belongs to the engine
 // (SurfaceKind::Glfw), and the host only forwards a frame loop.
@@ -231,11 +235,54 @@ bool RunApiWalk(cadgeom::ICadEngine& engine) {
     ok &= Check(scene->GetSelection()->GetCount() == 0,
                 "the selection dropped the destroyed entity");
 
-    Section("Not built yet");
+    Section("Parametric geometry");
     IGeometryBuilder* builder = scene->GetGeometryBuilder();
     ok &= Check(builder != nullptr, "geometry builder is reachable");
-    if (!IsValid(builder->MakeCircle(Plane{Vec3d{0, 0, 0}, Vec3d{0, 0, 1}}, 25.0))) {
-        Pending("MakeCircle", engine);
+
+    const Plane xy{Vec3d{0, 0, 0}, Vec3d{0, 0, 1}};
+    const EntityId circle = builder->MakeCircle(xy, 25.0);
+    ok &= Check(IsValid(circle), "created a circle from a plane and a radius");
+
+    Aabb bounds{};
+    ok &= Check(scene->GetEntity(circle)->GetWorldBounds(bounds) &&
+                    std::abs(bounds.max.x - 25.0) < 0.1,
+                "its bounds come from the tessellated curve");
+
+    // The point of a CAD kernel: changing a parameter regenerates the geometry.
+    // Nothing here edits a triangle.
+    ShapeParams params{};
+    ok &= Check(builder->GetParams(circle, params) && params.type == ShapeType::Circle,
+                "the parametric definition reads back");
+    params.circle.radius = 40.0;
+    ok &= Check(CgSucceeded(builder->SetParams(circle, params)), "the radius is editable");
+    ok &= Check(scene->GetEntity(circle)->GetWorldBounds(bounds) &&
+                    std::abs(bounds.max.x - 40.0) < 0.1,
+                "the geometry regenerated at the new radius");
+
+    ok &= Check(CgSucceeded(commands->Undo()) &&
+                    scene->GetEntity(circle)->GetWorldBounds(bounds) &&
+                    std::abs(bounds.max.x - 25.0) < 0.1,
+                "undo took the radius back");
+
+    ok &= Check(!IsValid(builder->MakeCircle(xy, -1.0)) &&
+                    engine.GetLastError() == CgResult::InvalidArgument,
+                "a negative radius is refused with a reason");
+    engine.ClearLastError();
+
+    ok &= Check(CgSucceeded(scene->DestroyEntity(circle)) && !scene->Exists(circle),
+                "deleting removes it");
+    ok &= Check(CgSucceeded(commands->Undo()) && scene->Exists(circle),
+                "and deleting is undoable too");
+
+    Section("Not built yet");
+    ExtrudeOptions extrudeOptions{};
+    if (!IsValid(builder->Extrude(circle, Vec3d{0, 0, 1}, 30.0, extrudeOptions))) {
+        Pending("Extrude", engine);
+    }
+
+    PickResult hit{};
+    if (!scene->Raycast(Ray{Vec3d{0, 0, 100}, Vec3d{0, 0, -1}}, PickFilter_All, hit)) {
+        Pending("Raycast", engine);
     }
 
     ExportOptions exportOptions{};
@@ -243,21 +290,165 @@ bool RunApiWalk(cadgeom::ICadEngine& engine) {
         Pending("Export", engine);
     }
 
-    if (CgFailed(engine.GetToolManager()->Activate(ToolId::Circle))) {
-        Pending("Activate(Circle)", engine);
+    if (CgFailed(engine.GetToolManager()->Activate(ToolId::Extrude))) {
+        Pending("Activate(Extrude)", engine);
     }
 
     return ok;
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2 — the renderer (M1)
+// Phase 2 — the renderer and the tools (M1, M2)
 // ---------------------------------------------------------------------------
 
 void PrintCameraHelp() {
     std::printf("  middle drag  orbit          shift+middle / right drag  pan\n"
                 "  wheel        zoom at cursor  double middle-click        zoom to fit\n"
-                "  1..7         standard views  F fit   P ortho/persp   G grid   W wireframe\n");
+                "  1..7         standard views  F fit   P ortho/persp   G grid   W wireframe\n"
+                "  V select  X point  L line  C circle  R rectangle  Y polyline  Esc cancel\n"
+                "  Del        delete the selection (Ctrl+Z / Ctrl+Y are host-side)\n");
+}
+
+/// Applies a style to one entity, since EntityStyle is set wholesale.
+void Style(cadgeom::IScene& scene, cadgeom::EntityId entity, cadgeom::Color color, float width,
+           cadgeom::LineStyle lineStyle) {
+    using namespace cadgeom;
+    IEntity* e = scene.GetEntity(entity);
+    if (!e) {
+        return;
+    }
+    EntityStyle style{};
+    e->GetStyle(style);
+    style.color = color;
+    style.lineWidth = width;
+    style.lineStyle = lineStyle;
+    e->SetStyle(style);
+}
+
+/// A mounting plate, drawn the way a draughtsman would: outline, bore, bolt
+/// holes on a hidden pitch circle, centre lines through the middle.
+///
+/// It exists to put every M2 primitive and every line style on screen at once —
+/// which is also the only way to see that the screen-space line expansion is
+/// giving the right widths and that the dash patterns phase correctly around a
+/// tessellated curve.
+void BuildDemoDrawing(cadgeom::IScene& scene) {
+    using namespace cadgeom;
+    IGeometryBuilder& builder = *scene.GetGeometryBuilder();
+
+    const Vec3d up{0.0, 0.0, 1.0};
+    const Plane xy{Vec3d{0, 0, 0}, up};
+
+    const Color kOutline{0.82f, 0.84f, 0.88f, 1.0f};
+    const Color kBore{0.30f, 0.68f, 0.95f, 1.0f};
+    const Color kCentre{0.95f, 0.55f, 0.15f, 1.0f};
+    const Color kHidden{0.45f, 0.48f, 0.55f, 1.0f};
+    const Color kConstruction{0.35f, 0.75f, 0.45f, 1.0f};
+
+    Style(scene, builder.MakeRectangle(xy, Vec3d{1, 0, 0}, 120.0, 80.0), kOutline, 2.5f,
+          LineStyle::Solid);
+    Style(scene, builder.MakeCircle(xy, 22.0), kBore, 2.0f, LineStyle::Solid);
+
+    // The bolt pitch circle is a construction feature, so it gets the dash-dot
+    // every drawing standard uses for one.
+    Style(scene, builder.MakeCircle(xy, 45.0), kHidden, 1.25f, LineStyle::DashDot);
+
+    // Centre lines: long-short-long, running past the outline as they should.
+    Style(scene, builder.MakeLine(Vec3d{-70, 0, 0}, Vec3d{70, 0, 0}), kCentre, 1.25f,
+          LineStyle::Center);
+    Style(scene, builder.MakeLine(Vec3d{0, -50, 0}, Vec3d{0, 50, 0}), kCentre, 1.25f,
+          LineStyle::Center);
+
+    // Four bolt holes on the pitch circle, each with its centre marked.
+    for (int i = 0; i < 4; ++i) {
+        const double angle = (45.0 + 90.0 * i) * 3.14159265358979323846 / 180.0;
+        const Vec3d centre{45.0 * std::cos(angle), 45.0 * std::sin(angle), 0.0};
+        Style(scene, builder.MakeCircle(Plane{centre, up}, 6.0), kBore, 1.75f, LineStyle::Solid);
+        Style(scene, builder.MakePoint(centre), kCentre, 7.0f, LineStyle::Solid);
+    }
+
+    // A chamfered corner, as an open polyline.
+    const Vec3d chamfer[] = {{-60.0, 28.0, 0.0}, {-52.0, 40.0, 0.0}, {-40.0, 40.0, 0.0}};
+    Style(scene, builder.MakePolyline(CgSpan<const Vec3d>{chamfer, 3}, false), kConstruction, 2.0f,
+          LineStyle::Dashed);
+
+    // Two more on other planes, because a work plane is the whole reason 2D
+    // creation has an answer in a 3D scene at all (§6.1). These are what make
+    // the drawing read as three-dimensional when the camera orbits.
+    Style(scene, builder.MakeCircle(Plane{Vec3d{0, 0, 30}, Vec3d{1, 0, 0}}, 18.0), kBore, 1.75f,
+          LineStyle::Dotted);
+    Style(scene, builder.MakeArc(Plane{Vec3d{0, 0, 0}, Vec3d{0, 1, 0}}, 55.0, 0.0, 3.14159 * 0.5),
+          kConstruction, 1.75f, LineStyle::Hidden);
+}
+
+/// Feeds the active tool the events a user would generate, so the interactive
+/// creation path is exercised on a machine with no display. This is M2's
+/// acceptance criterion: the mouse can draw.
+bool DriveTools(cadgeom::ICadEngine& engine, cadgeom::IViewport& viewport) {
+    using namespace cadgeom;
+    bool ok = true;
+
+    IScene& scene = *engine.GetScene();
+    IToolManager& tools = *engine.GetToolManager();
+    ICamera& camera = *viewport.GetCamera();
+
+    // The work plane is what turns a pixel into a point. Every world position
+    // below sits on it, so the round trip through the screen lands back where it
+    // started (§6.1).
+    const auto send = [&](const Vec3d& world, MouseAction action) {
+        Vec2d pixel{};
+        if (!camera.WorldToScreen(world, pixel)) {
+            return false;
+        }
+        MouseEvent e{};
+        e.button = MouseButton::Left;
+        e.action = action;
+        e.x = pixel.x;
+        e.y = pixel.y;
+        return viewport.OnMouseEvent(e);
+    };
+
+    const uint32_t before = scene.GetEntityCount();
+
+    // Click, then click: the habit of every CAD package.
+    ok &= Check(CgSucceeded(tools.Activate(ToolId::Line)), "activated the line tool");
+    // An idle tool tracks the cursor without claiming the event, so the first
+    // move is reported unconsumed on purpose; the press is what it takes.
+    send(Vec3d{-30, -60, 0}, MouseAction::Move);
+    ok &= Check(send(Vec3d{-30, -60, 0}, MouseAction::Down), "the tool took the first point");
+    send(Vec3d{-30, -60, 0}, MouseAction::Up);
+    send(Vec3d{30, -60, 0}, MouseAction::Move);
+    send(Vec3d{30, -60, 0}, MouseAction::Down);
+    ok &= Check(scene.GetEntityCount() == before + 1, "click-click drew a line");
+
+    // Press, drag, release: the other habit, same tool machinery.
+    ok &= Check(CgSucceeded(tools.Activate(ToolId::Rectangle)), "activated the rectangle tool");
+    send(Vec3d{-50, 50, 0}, MouseAction::Move);
+    send(Vec3d{-50, 50, 0}, MouseAction::Down);
+    send(Vec3d{-20, 65, 0}, MouseAction::Move);
+    send(Vec3d{-20, 65, 0}, MouseAction::Up);
+    ok &= Check(scene.GetEntityCount() == before + 2, "press-drag-release drew a rectangle");
+
+    const EntityId drawn = scene.GetEntityAt(scene.GetEntityCount() - 1);
+    ok &= Check(scene.GetEntity(drawn)->GetShapeType() == ShapeType::Rectangle,
+                "and what it drew is a parametric rectangle");
+
+    ok &= Check(CgSucceeded(scene.GetCommandStack()->Undo()) &&
+                    scene.GetEntityCount() == before + 1,
+                "an interactively drawn shape undoes like any other");
+    scene.GetCommandStack()->Redo();
+
+    // Left mid-gesture on purpose: the circle below never becomes a shape, it
+    // just shows up in the overlay for the screenshot. Preview geometry never
+    // enters the scene and never enters the undo stack (§6.2).
+    ok &= Check(CgSucceeded(tools.Activate(ToolId::Circle)), "activated the circle tool");
+    send(Vec3d{40, 55, 0}, MouseAction::Move);
+    send(Vec3d{40, 55, 0}, MouseAction::Down);
+    send(Vec3d{62, 55, 0}, MouseAction::Move);
+    ok &= Check(scene.GetEntityCount() == before + 2,
+                "a rubber-band preview stays out of the scene");
+
+    return ok;
 }
 
 bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
@@ -268,7 +459,7 @@ bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
     desc.surface.kind = options.headless ? SurfaceKind::Headless : SurfaceKind::Glfw;
     desc.surface.width = options.width;
     desc.surface.height = options.height;
-    desc.surface.title = "CadGeom — M1";
+    desc.surface.title = "CadGeom — M2";
     desc.projection =
         options.perspective ? ProjectionMode::Perspective : ProjectionMode::Orthographic;
     // Linear light: the renderer composes in a float target and the swapchain
@@ -304,7 +495,26 @@ bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
                     std::abs(back.x - width * 0.5) < 1.0 && std::abs(back.y - height * 0.5) < 1.0,
                 "ScreenToRay and WorldToScreen agree");
 
+    Section("Drawing");
+    BuildDemoDrawing(*engine.GetScene());
+    ok &= Check(engine.GetScene()->GetEntityCount() == 16, "built the demo drawing");
+    Aabb sceneBounds{};
+    ok &= Check(engine.GetScene()->GetBounds(sceneBounds), "the scene reports its bounds");
+    // Top reads as a drawing, which is what the orthographic default is for;
+    // isometric is where the geometry on the other two work planes shows up.
+    camera->SetStandardView(options.perspective ? StandardView::Isometric : StandardView::Top);
+    camera->ZoomToFit(nullptr, 1.25);
+
+    Section("Tools");
+    ok &= DriveTools(engine, *viewport);
+
     if (!options.headless) {
+        // Back to a view that shows the off-plane geometry, and out of the
+        // half-finished circle the tool drive left behind.
+        engine.GetToolManager()->Cancel();
+        camera->SetStandardView(StandardView::Isometric);
+        camera->ZoomToFit(nullptr, 1.25);
+        Section("Interactive");
         PrintCameraHelp();
     }
 

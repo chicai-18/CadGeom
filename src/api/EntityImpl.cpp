@@ -10,7 +10,13 @@ namespace cadgeom::api {
 EntityImpl::EntityImpl(SceneImpl& scene, EntityId id, const char* name, EntityId parent)
     : scene_(scene), id_(id), parent_(parent), name_(name ? name : "") {}
 
-EntityImpl::~EntityImpl() = default;
+EntityImpl::~EntityImpl() {
+    // Still attached means nobody claimed it, so the geometry dies with the
+    // entity. A delete that intends to be undoable detaches first.
+    if (IsValid(shape_)) {
+        scene_.Kernel().Destroy(shape_);
+    }
+}
 
 EntityId EntityImpl::GetId() const {
     return id_;
@@ -59,9 +65,37 @@ void EntityImpl::GetWorldTransform(Mat4d& out) const {
 }
 
 bool EntityImpl::GetWorldBounds(Aabb& out) const {
-    // Requires tessellated geometry, which arrives with the kernel in M2.
-    (void)out;
-    return false;
+    if (!IsValid(shape_)) {
+        return false;  // A group node has no geometry of its own.
+    }
+
+    // Object-space bounds from the kernel, which tessellates on demand if the
+    // parameters have moved since anyone last looked.
+    Aabb local{};
+    if (!scene_.Kernel().GetBounds(shape_, local)) {
+        return false;
+    }
+
+    Mat4d world{};
+    GetWorldTransform(world);
+    out = Transformed(local, world);
+    return true;
+}
+
+void EntityImpl::SetShape(ShapeId shape, ShapeType type) {
+    if (IsValid(shape_) && shape_ != shape) {
+        scene_.Kernel().Destroy(shape_);
+    }
+    shape_ = shape;
+    shapeType_ = type;
+    scene_.BumpRevision();
+}
+
+ShapeId EntityImpl::DetachShape() {
+    const ShapeId detached = shape_;
+    shape_ = kInvalidShape;
+    shapeType_ = ShapeType::None;
+    return detached;
 }
 
 void EntityImpl::GetStyle(EntityStyle& out) const {
@@ -74,12 +108,12 @@ void EntityImpl::SetStyle(const EntityStyle& style) {
 }
 
 bool EntityImpl::IsVisible() const {
-    return visible_;
+    return style_.visible;
 }
 
 void EntityImpl::SetVisible(bool visible) {
-    if (visible_ != visible) {
-        visible_ = visible;
+    if (style_.visible != visible) {
+        style_.visible = visible;
         scene_.BumpRevision();
     }
 }

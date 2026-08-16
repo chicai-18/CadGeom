@@ -29,6 +29,10 @@ struct FrameUniforms {
     float gridParams[4];
     float gridOffset[4];
     float focusRel[4];
+    /// x: pixels per world unit  y,z: viewport size in pixels  w: unused.
+    /// The line and point passes expand their geometry in screen space, so they
+    /// need to know how big a pixel is.
+    float lineParams[4];
 };
 
 /// Per-draw data, small enough to ride in push constants and skip a descriptor
@@ -38,8 +42,21 @@ struct MeshPushConstants {
     float color[4];
 };
 
-static_assert(sizeof(MeshPushConstants) <= 128,
-              "push constants must fit the 128-byte minimum every Vulkan device guarantees");
+/// Shared by the line and point passes. `params` is x: pixel width (lines) or
+/// pixel diameter (points), y: LineStyle as a float, z: depth bias in NDC units
+/// toward the viewer, w: unused.
+struct CurvePushConstants {
+    float model[16];
+    float color[4];
+    float params[4];
+};
+
+/// Every Vulkan device guarantees at least this much, and one range shared by
+/// every pass means the descriptor set survives a pipeline change.
+inline constexpr uint32_t kPushConstantBytes = 128;
+
+static_assert(sizeof(MeshPushConstants) <= kPushConstantBytes, "push constants overflow");
+static_assert(sizeof(CurvePushConstants) <= kPushConstantBytes, "push constants overflow");
 
 /// One viewport's view of the world for one frame, still in double.
 struct RenderView {
@@ -61,11 +78,17 @@ struct RenderView {
     double gridFadeStart{50.0};
     double gridFadeEnd{100.0};
 
+    /// World units one pixel covers at the focus point. Exact everywhere under
+    /// an orthographic camera; under perspective it is right at the focus and
+    /// approximate elsewhere, which is what the dash phase is scaled by.
+    double pixelWorldSize{1.0};
+
     Color background{0.16f, 0.17f, 0.19f, 1.0f};
     bool showGrid{true};
     bool wireframe{false};
 };
 
-void FillFrameUniforms(const RenderView& view, FrameUniforms& out);
+void FillFrameUniforms(const RenderView& view, uint32_t viewportWidth, uint32_t viewportHeight,
+                       FrameUniforms& out);
 
 } // namespace cadgeom::render

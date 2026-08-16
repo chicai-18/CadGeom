@@ -13,9 +13,11 @@ class SceneImpl;
 
 /// Undo/redo for the scene.
 ///
-/// Complete as of M0 even though nothing pushes to it yet: the stack is
-/// self-contained, the engine's own commands arrive with the kernel in M2, and
-/// a host can already route its edits through ICommand today.
+/// Every engine-side mutation that can be undone goes through here: creating
+/// geometry, editing parameters, deleting. Which means a command running on this
+/// stack can trigger another Push — a host command whose Undo() calls
+/// IScene::DestroyEntity does exactly that — and the stack has to survive it.
+/// See Push() for how.
 class CommandStackImpl final : public ICommandStack {
 public:
     explicit CommandStackImpl(SceneImpl& scene);
@@ -42,6 +44,10 @@ public:
 private:
     class GroupCommand;
 
+    /// Marks the stack as "inside a command" for as long as it lives, so a
+    /// nested Push knows to absorb rather than record.
+    class Running;
+
     void ClearRedo();
     void TrimToCapacity();
 
@@ -55,6 +61,10 @@ private:
     /// outermost group becomes a stack entry so one user gesture is one undo.
     GroupCommand* group_{nullptr};
     uint32_t groupDepth_{0};
+
+    /// How deep inside Execute()/Undo() the stack currently is. Non-zero means
+    /// any Push arriving now is a side effect of a command already running.
+    uint32_t running_{0};
 
     uint32_t capacity_{0};  ///< 0 = unlimited
 };
