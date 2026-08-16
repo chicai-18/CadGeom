@@ -39,6 +39,16 @@ struct ShapeDef {
     /// 而轮廓定义一旦捕获就不再变，共享一份只读的正合适。
     std::shared_ptr<const ShapeDef> profile;
 
+    /// Mesh 才有：导入进来的三角网格，**这就是它的定义本身**。
+    ///
+    /// 别的类型都是「参数是真相、网格是缓存」，导入的网格反过来 —— 文件里给的就是
+    /// 三角形，没有可以重新生成它们的参数。所以它存在 def 里（改细分容差不会让它
+    /// 重新生成），Tessellate 只是把它抄进缓存、顺带认出特征边。
+    ///
+    /// shared_ptr 的理由和 profile 一样：ShapeDef 按值传，而一份几万个三角形的网格
+    /// 每次撤销都深拷一遍是白花钱 —— 它导入之后就不再变了。
+    std::shared_ptr<const MeshData> mesh;
+
     ShapeType Type() const { return params.type; }
 };
 

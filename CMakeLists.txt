@@ -77,6 +77,15 @@ if(CADGEOM_ENABLE_VULKAN)
     endif()
 endif()
 
+# The IO layer's readers (M5). Both are header-plus-one-source libraries, and
+# both are instantiated in a translation unit of our own (src/io/Tiny*Impl.cpp)
+# rather than through their CMake targets: the compile switches that matter —
+# double-precision OBJ vertices, no stb_image in tinygltf — have to be identical
+# in every TU that sees those headers, and owning the instantiation is what makes
+# that enforceable.
+cadgeom_require_submodule(tinyobjloader)
+cadgeom_require_submodule(tinygltf)
+
 if(CADGEOM_ENABLE_VULKAN)
     # The renderer's own dependencies. GLFW is in here rather than under the
     # examples because the engine ships a GLFW-backed ISurface: a host that
@@ -118,6 +127,7 @@ set(CADGEOM_PUBLIC_HEADERS
 
 set(CADGEOM_SOURCES
     src/core/Error.cpp
+    src/core/File.cpp
     src/core/Log.cpp
     src/core/ObjectTracker.cpp
     src/core/Png.cpp
@@ -130,6 +140,11 @@ set(CADGEOM_SOURCES
     src/geom/Snap.cpp
     src/geom/Tessellate.cpp
     src/scene/Bvh.cpp
+    src/io/GltfIO.cpp
+    src/io/ObjIO.cpp
+    src/io/Registry.cpp
+    src/io/TinyGltfImpl.cpp
+    src/io/TinyObjImpl.cpp
     src/interact/Gizmo.cpp
     src/interact/OrbitCamera.cpp
     src/interact/OverlayBuilder.cpp
@@ -149,6 +164,7 @@ set(CADGEOM_SOURCES
     src/api/GeometryBuilderImpl.cpp
     src/api/IoRegistryImpl.cpp
     src/api/SceneImpl.cpp
+    src/api/SceneIo.cpp
     src/api/SelectionImpl.cpp
     src/api/ToolManagerImpl.cpp)
 
@@ -202,7 +218,9 @@ target_include_directories(cadgeom
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/tinyobjloader
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/tinygltf)
 
 # C++20 inside; hosts only need C++17 to consume the headers, and nothing in
 # the public surface requires more than aggregate initializers.

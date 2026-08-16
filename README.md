@@ -6,13 +6,14 @@ standalone.
 
 Design document: [`docs/architecture.md`](docs/architecture.md).
 
-> **Status: milestone M4 (extrude into solids).** The public API is
-> complete and frozen. Working: the Vulkan renderer, the geometry kernel,
+> **Status: milestone M5 (file IO).** The public API is complete and frozen.
+> Working: the Vulkan renderer, the geometry kernel,
 > points/lines/arcs/circles/rectangles/polylines, screen-space line rendering with
 > dash patterns, the work plane, the interactive tools, ray picking through a BVH
 > with vertex/edge/face priority, geometry snapping, selection highlighting,
-> translate/rotate gizmos, undo/redo, and extrusion into solids with topology,
-> per-face picking and feature-edge rendering. Not built yet: OBJ/glTF (M5), MSAA
+> translate/rotate gizmos, undo/redo, extrusion into solids with topology,
+> per-face picking and feature-edge rendering, and OBJ/glTF/GLB read and write
+> that keeps the parametric definitions across a round trip. Not built yet: MSAA
 > and UI panels (M6). Calls into those return `CgResult::NotImplemented` with a
 > message naming the milestone that brings them.
 
@@ -41,6 +42,10 @@ git submodule.
 # No display, or checking a render change without eyeballing a window:
 ./build/bin/Debug/glfw_viewer.exe --headless --screenshot shot.png
 ./build/bin/Debug/glfw_viewer.exe --headless --perspective --screenshot iso.png
+
+# Write what the demo drew, then open it again:
+./build/bin/Debug/glfw_viewer.exe --headless --export part.glb --frames 1
+./build/bin/Debug/glfw_viewer.exe --import part.glb
 ```
 
 | Option | Default | |
@@ -92,6 +97,7 @@ include/cadgeom/   public headers — the only contract
 src/core/          double math, logging, errors, object tracking
 src/geom/          the kernel: parametric curves, tessellation, intersection
 src/scene/         the BVH that picking and snapping query
+src/io/            OBJ and glTF, and the parametric round trip through `extras`
 src/render/        Vulkan RHI, passes, surfaces
 src/interact/      camera, work plane, picker, snapping, gizmo, tools, overlay
 src/api/           interface implementations + the exported factory
@@ -119,6 +125,9 @@ Dependencies point down only: `api/ → interact/ → scene · io · render → 
 - **Picking is CPU-side**, a `double` ray against a BVH, so it can distinguish a
   vertex from an edge from a face and feed snapping — semantics a GPU ID buffer
   cannot give.
+- **glTF is effectively the native format.** The parametric definitions ride in
+  each node's `extras`, so our own round trip keeps a circle editable as a circle;
+  Blender and friends ignore the extra keys and see a plain mesh.
 - The interface obeys a strict ABI discipline (no STL across the boundary, no
   exceptions, append-only vtables) documented in `docs/architecture.md` §2.2 and
   summarised in `CLAUDE.md`.

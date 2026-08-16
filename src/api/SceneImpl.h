@@ -87,6 +87,10 @@ public:
     geom::IGeometryKernel& Kernel() { return *kernel_; }
     const geom::IGeometryKernel& Kernel() const { return *kernel_; }
 
+    /// @brief 引擎自己人看到的撤销栈，带着 `ICommandStack` 里没有的那几件事
+    ///        （`AbortGroup`）。宿主拿到的还是那个公开接口。
+    CommandStackImpl& Commands() { return commands_; }
+
     /// Bump whenever anything a renderer or a host would observe changes.
     void BumpRevision() {
         ++revision_;

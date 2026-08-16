@@ -36,6 +36,18 @@ public:
     void BeginGroup(const char* utf8Name) override;
     void EndGroup() override;
 
+    // -- Engine-side access -------------------------------------------------
+
+    /// @brief 把当前这一组整个撤销掉并丢弃，撤销栈和重做栈都不留痕迹。
+    ///
+    /// 一次读到一半失败的导入要的正是这个：`EndGroup()` 之后再 `Undo()` 也能把东西
+    /// 清干净，但会在重做栈上留下一条「重做 Import」—— 重做出来的是那半个模型，
+    /// 用户点下去只会得到刚才失败的残骸。
+    ///
+    /// @note 只对最外层有效：嵌套的 BeginGroup 由它们自己的 EndGroup 收尾，中止的
+    ///       是整个手势。
+    void AbortGroup();
+
     void Clear() override;
     uint32_t GetUndoCount() const override;
     uint32_t GetRedoCount() const override;

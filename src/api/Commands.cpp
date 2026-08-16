@@ -38,7 +38,8 @@ CgResult ReportedError(CgResult fallback) {
 // ---------------------------------------------------------------------------
 
 CreateShapeCommand::CreateShapeCommand(SceneImpl& scene, geom::ShapeDef def, const char* name,
-                                       EntityId parent, const Transform& local)
+                                       EntityId parent, const Transform& local,
+                                       const EntityStyle& style)
     : scene_(scene),
       def_(std::move(def)),
       // 撤销菜单里读的是动作，不是类型：一个实体是「拉伸」出来的，说「创建实体」
@@ -47,7 +48,8 @@ CreateShapeCommand::CreateShapeCommand(SceneImpl& scene, geom::ShapeDef def, con
                                              : std::string("Create ") + TypeName(def_.Type())),
       entityName_(name ? name : TypeName(def_.Type())),
       parent_(parent),
-      local_(local) {}
+      local_(local),
+      style_(style) {}
 
 CreateShapeCommand::~CreateShapeCommand() = default;
 
@@ -80,6 +82,7 @@ CgResult CreateShapeCommand::Execute(IScene*) {
 
     EntityImpl* entity = scene_.FindEntity(entity_);
     entity->SetLocalTransform(local_);
+    entity->SetStyle(style_);
     entity->SetShape(shape_, def_.Type());
     applied_ = true;
     return CgResult::Ok;
@@ -106,6 +109,44 @@ CgResult CreateShapeCommand::Undo(IScene*) {
 
 const char* CreateShapeCommand::GetName() const {
     return label_.c_str();
+}
+
+// ---------------------------------------------------------------------------
+// CreateGroupCommand
+// ---------------------------------------------------------------------------
+
+CreateGroupCommand::CreateGroupCommand(SceneImpl& scene, const char* name, EntityId parent,
+                                       const Transform& local)
+    : scene_(scene), entityName_(name ? name : "Group"), parent_(parent), local_(local) {}
+
+CreateGroupCommand::~CreateGroupCommand() = default;
+
+void CreateGroupCommand::Release() {
+    delete this;
+}
+
+CgResult CreateGroupCommand::Execute(IScene*) {
+    // 和 CreateShapeCommand 同理：重做要把实体放回原来那个 id 上，否则任何还攥着
+    // 这个 id 的东西（比如同一组里稍后建出来的子节点）就指向了空处。
+    const EntityId created = scene_.CreateEntityInternal(entityName_.c_str(), parent_, entity_);
+    if (!IsValid(created)) {
+        return ReportedError(CgResult::InvalidState);
+    }
+    entity_ = created;
+    scene_.FindEntity(entity_)->SetLocalTransform(local_);
+    return CgResult::Ok;
+}
+
+CgResult CreateGroupCommand::Undo(IScene*) {
+    if (!scene_.FindEntity(entity_)) {
+        return core::SetError(CgResult::InvalidHandle, "Undo Create: entity %llu is already gone",
+                              static_cast<unsigned long long>(entity_.value));
+    }
+    return scene_.DestroyEntityInternal(entity_);
+}
+
+const char* CreateGroupCommand::GetName() const {
+    return "Create Group";
 }
 
 // ---------------------------------------------------------------------------

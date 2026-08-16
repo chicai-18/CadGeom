@@ -1,6 +1,6 @@
-// The IO extension point. No format handlers ship until M5, so what is under
-// test here is the registry itself: dispatch, ownership and the errors a host
-// sees when it asks for a format nobody registered.
+// The IO extension point itself: dispatch, ownership, and the errors a host sees
+// when it asks for a format nobody registered. What the built-in OBJ and glTF
+// handlers actually *do* with a file is test_io.cpp's business.
 
 #include "TestSupport.h"
 
@@ -12,6 +12,23 @@
 using namespace cadgeom;
 
 namespace {
+
+/// obj + gltf + glb, registered by the engine at startup. A host's own format
+/// lands on top of these rather than into an empty table, which is exactly the
+/// situation the tests below have to describe.
+constexpr uint32_t kBuiltinFormats = 3;
+
+/// Registration order is stable, so the built-ins occupy the first indices and a
+/// host's format is whatever it registered — but finding it by name is what a
+/// host would actually do.
+bool HasFormat(const IIoRegistry& io, const char* extension) {
+    for (uint32_t i = 0; i < io.GetFormatCount(); ++i) {
+        if (std::strcmp(io.GetFormatExtension(i), extension) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
 
 struct IoLedger {
     int imported = 0;
@@ -72,19 +89,25 @@ private:
 
 } // namespace
 
-TEST_CASE("nothing is registered before M5", "[io]") {
+TEST_CASE("the built-in formats are there from the first frame", "[io]") {
     cgtest::EngineFixture fixture;
     IIoRegistry& io = *fixture.Engine().GetIoRegistry();
 
-    CHECK(io.GetFormatCount() == 0);
-    CHECK(io.GetFormatExtension(0) == nullptr);
-    CHECK_FALSE(io.CanImport("obj"));
-    CHECK_FALSE(io.CanExport("gltf"));
+    CHECK(io.GetFormatCount() == kBuiltinFormats);
+    CHECK(HasFormat(io, "obj"));
+    CHECK(HasFormat(io, "gltf"));
+    CHECK(HasFormat(io, "glb"));
+    for (const char* extension : {"obj", "gltf", "glb"}) {
+        CHECK(io.CanImport(extension));
+        CHECK(io.CanExport(extension));
+    }
+    CHECK(io.GetFormatExtension(kBuiltinFormats) == nullptr);
 
+    // A format nobody has registered still says so, and says what it does have —
+    // guessing at STEP would be worse than admitting it cannot read it.
     ExportOptions options{};
-    CHECK(io.Export("model.glb", options, nullptr, nullptr) == CgResult::NotSupported);
-    // The message has to name the milestone, or this looks like a bug.
-    CHECK(std::strstr(fixture.Engine().GetLastErrorMessage(), "M5") != nullptr);
+    CHECK(io.Export("part.step", options, nullptr, nullptr) == CgResult::NotSupported);
+    CHECK(std::strstr(fixture.Engine().GetLastErrorMessage(), "gltf") != nullptr);
 }
 
 TEST_CASE("a host can register its own format today", "[io]") {
@@ -96,8 +119,8 @@ TEST_CASE("a host can register its own format today", "[io]") {
         REQUIRE(CgSucceeded(
             io.Register("step", new FakeImporter(ledger), new FakeExporter(ledger))));
 
-        CHECK(io.GetFormatCount() == 1);
-        CHECK(std::string(io.GetFormatExtension(0)) == "step");
+        CHECK(io.GetFormatCount() == kBuiltinFormats + 1);
+        CHECK(HasFormat(io, "step"));
         CHECK(io.CanImport("step"));
         CHECK(io.CanExport("step"));
 
@@ -163,13 +186,15 @@ TEST_CASE("registering over a format replaces only the direction given", "[io]")
     cgtest::EngineFixture fixture;
     IIoRegistry& io = *fixture.Engine().GetIoRegistry();
 
+    // Straight over the built-in OBJ handler, which is the point: a host with its
+    // own OBJ reader replaces ours and keeps everything else.
     REQUIRE(CgSucceeded(io.Register("obj", new FakeImporter(ledger), new FakeExporter(ledger))));
     REQUIRE(CgSucceeded(io.Register("obj", new FakeImporter(ledger), nullptr)));
 
     CHECK(ledger.importersReleased == 1);  // The superseded importer.
     CHECK(ledger.exportersReleased == 0);  // The exporter was never replaced.
     CHECK(io.CanExport("obj"));
-    CHECK(io.GetFormatCount() == 1);
+    CHECK(io.GetFormatCount() == kBuiltinFormats);
 }
 
 TEST_CASE("unregistering releases the handlers", "[io]") {
@@ -182,7 +207,7 @@ TEST_CASE("unregistering releases the handlers", "[io]") {
 
     CHECK(ledger.importersReleased == 1);
     CHECK(ledger.exportersReleased == 1);
-    CHECK(io.GetFormatCount() == 0);
+    CHECK(io.GetFormatCount() == kBuiltinFormats - 1);
     CHECK_FALSE(io.CanImport("obj"));
     CHECK(io.Unregister("obj") == CgResult::NotFound);
 }
@@ -194,7 +219,9 @@ TEST_CASE("registration is rejected when there is nothing to register", "[io]") 
     CHECK(io.Register("obj", nullptr, nullptr) == CgResult::InvalidArgument);
     CHECK(io.Register("", nullptr, nullptr) == CgResult::InvalidArgument);
     CHECK(io.Register(nullptr, nullptr, nullptr) == CgResult::InvalidArgument);
-    CHECK(io.GetFormatCount() == 0);
+    // Rejected means nothing changed — not even the entry it named.
+    CHECK(io.GetFormatCount() == kBuiltinFormats);
+    CHECK(io.CanImport("obj"));
 }
 
 TEST_CASE("import-only and export-only formats dispatch independently", "[io]") {

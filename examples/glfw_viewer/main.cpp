@@ -1,12 +1,12 @@
-// CadGeom demo host — milestones M0 through M4.
+// CadGeom demo host — milestones M0 through M5.
 //
 // Two phases, deliberately separate:
 //
 //   1. A pass over the public surface with no GPU in sight: the scene graph, the
-//      geometry kernel, picking, undo. This is M0's acceptance test — create,
-//      exercise, release, prove nothing leaked — and it is bracketed by a CRT
-//      heap checkpoint, so it has to stay free of anything that allocates behind
-//      the engine's back.
+//      geometry kernel, picking, undo, and the file round trip. This is M0's
+//      acceptance test — create, exercise, release, prove nothing leaked — and it
+//      is bracketed by a CRT heap checkpoint, so it has to stay free of anything
+//      that allocates behind the engine's back.
 //   2. A viewport: a window, a grid, an orbit camera, a drawing made of points,
 //      lines, circles and rectangles, the tools that create them, the
 //      select/move/rotate gestures that edit them, and the extrusions that turn
@@ -115,6 +115,11 @@ struct Options {
     bool perspective{false};
     uint32_t frames{0};  ///< 0 = until the window closes (or 4 when headless).
     std::string screenshotPath;
+    /// --import PATH：看一个真实文件，而不是内置的那张图纸。
+    std::string importPath;
+    /// --export PATH：把画完的场景写出去。和 --import 配成一对，M5 的往返就在
+    /// 命令行上跑得通了。
+    std::string exportPath;
     uint32_t width{1280};
     uint32_t height{720};
 };
@@ -142,6 +147,14 @@ Options ParseOptions(int argc, char** argv) {
             if (const char* count = next()) {
                 options.frames = static_cast<uint32_t>(std::atoi(count));
             }
+        } else if (std::strcmp(arg, "--import") == 0) {
+            if (const char* path = next()) {
+                options.importPath = path;
+            }
+        } else if (std::strcmp(arg, "--export") == 0) {
+            if (const char* path = next()) {
+                options.exportPath = path;
+            }
         } else if (std::strcmp(arg, "--size") == 0) {
             const char* w = next();
             const char* h = next();
@@ -151,7 +164,8 @@ Options ParseOptions(int argc, char** argv) {
             }
         } else {
             std::printf("usage: glfw_viewer [--headless] [--api-only] [--perspective]\n"
-                        "                   [--screenshot PATH] [--frames N] [--size W H]\n");
+                        "                   [--screenshot PATH] [--frames N] [--size W H]\n"
+                        "                   [--import MODEL] [--export MODEL]  (.gltf/.glb/.obj)\n");
         }
     }
     if (options.headless && options.frames == 0) {
@@ -159,6 +173,34 @@ Options ParseOptions(int argc, char** argv) {
     }
     return options;
 }
+
+#if CADGEOM_DEMO_HEAP_CHECK
+/// Runs one silent export/import so the one-time cost of the file layer is
+/// already on the heap before the checkpoint below takes its baseline. Says
+/// nothing and checks nothing: whether it worked is phase 1's business.
+void WarmUpFileIo(const cadgeom::EngineDesc& desc) {
+    cadgeom::EngineDesc quiet = desc;
+    quiet.logLevel = cadgeom::LogLevel::Off;
+    quiet.logCallback = nullptr;
+
+    cadgeom::EnginePtr engine = cadgeom::CreateEngine(quiet);
+    if (!engine) {
+        return;
+    }
+    const char* path = "cadgeom_warmup.glb";
+    engine->GetScene()->GetGeometryBuilder()->MakeCircle(
+        cadgeom::Plane{cadgeom::Vec3d{0, 0, 0}, cadgeom::Vec3d{0, 0, 1}}, 1.0);
+
+    cadgeom::ExportOptions exportOptions{};
+    if (cadgeom::CgSucceeded(
+            engine->GetIoRegistry()->Export(path, exportOptions, nullptr, nullptr))) {
+        cadgeom::ImportOptions importOptions{};
+        engine->GetIoRegistry()->Import(path, importOptions, nullptr, nullptr);
+    }
+    engine.reset();
+    std::remove(path);
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Phase 1 — the public surface, no GPU involved (M0)
@@ -345,12 +387,48 @@ bool RunApiWalk(cadgeom::ICadEngine& engine) {
                 "the pick drives the selection, sub-element and all");
     pickSelection->Clear();
 
-    Section("Not built yet");
-    ExportOptions exportOptions{};
-    if (CgFailed(engine.GetIoRegistry()->Export("out.glb", exportOptions, nullptr, nullptr))) {
-        Pending("Export", engine);
-    }
+    Section("Data IO");
+    // M5 的验收标准：导出再导入，参数化信息一个不丢（§9）。glTF 的 `extras` 带着
+    // 圆心半径、拉伸方向和距离一起走，所以读回来的圆还是圆 —— 不是一堆看着像圆的
+    // 三角形。别家软件读同一个文件时 `extras` 被忽略，看到的是一个普通 mesh。
+    IIoRegistry* io = engine.GetIoRegistry();
+    ok &= Check(io->CanExport("gltf") && io->CanExport("obj") && io->CanImport("glb"),
+                "the built-in formats are registered at startup");
 
+    ExportOptions exportOptions{};
+    ok &= Check(CgSucceeded(io->Export("cadgeom_demo.glb", exportOptions, nullptr, nullptr)),
+                "exported the scene to cadgeom_demo.glb");
+    ok &= Check(CgSucceeded(io->Export("cadgeom_demo.obj", exportOptions, nullptr, nullptr)),
+                "and to cadgeom_demo.obj (triangles and polylines, no parameters)");
+
+    // 读回一个干净的场景。mergeIntoScene = false 会先清空 —— 连撤销栈一起，所以这
+    // 一次导入本身撤不回来，这是「替换而不是合并」明码标价的代价。
+    ImportOptions importOptions{};
+    importOptions.mergeIntoScene = false;
+    ok &= Check(CgSucceeded(io->Import("cadgeom_demo.glb", importOptions, nullptr, nullptr)),
+                "read the whole thing back from the .glb");
+
+    EntityId reloaded = kInvalidEntity;
+    for (uint32_t i = 0; i < scene->GetEntityCount(); ++i) {
+        const EntityId id = scene->GetEntityAt(i);
+        if (scene->GetEntity(id)->GetShapeType() == ShapeType::Circle) {
+            reloaded = id;
+            break;
+        }
+    }
+    ShapeParams reloadedParams{};
+    ok &= Check(IsValid(reloaded) && builder->GetParams(reloaded, reloadedParams) &&
+                    reloadedParams.circle.radius == 25.0,
+                "the circle came back as a circle, radius and all");
+
+    // 参数是真相：改半径依旧是重新生成几何，和它有没有进过文件无关。
+    reloadedParams.circle.radius = 33.0;
+    ok &= Check(CgSucceeded(builder->SetParams(reloaded, reloadedParams)) &&
+                    scene->GetEntity(reloaded)->GetWorldBounds(bounds) &&
+                    std::abs(bounds.max.x - 33.0) < 0.1,
+                "and it is still editable after the round trip");
+
+    Section("Not built yet");
     if (CgFailed(engine.GetToolManager()->Activate(ToolId::Measure))) {
         Pending("Activate(Measure)", engine);
     }
@@ -746,18 +824,48 @@ bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
                     std::abs(back.x - width * 0.5) < 1.0 && std::abs(back.y - height * 0.5) < 1.0,
                 "ScreenToRay and WorldToScreen agree");
 
-    Section("Drawing");
-    BuildDemoDrawing(*engine.GetScene());
-    ok &= Check(engine.GetScene()->GetEntityCount() == 16, "built the demo drawing");
     Aabb sceneBounds{};
-    ok &= Check(engine.GetScene()->GetBounds(sceneBounds), "the scene reports its bounds");
-    // Top reads as a drawing, which is what the orthographic default is for;
-    // isometric is where the geometry on the other two work planes shows up.
-    camera->SetStandardView(options.perspective ? StandardView::Isometric : StandardView::Top);
-    camera->ZoomToFit(nullptr, 1.25);
+    if (!options.importPath.empty()) {
+        // M5：拿一个真实文件当输入。导入的网格没有参数化定义可谈，特征边是从三角形
+        // 里按折角认出来的 —— 一个导进来的立方体因此还是长得像立方体，而不是一团
+        // 没有轮廓的灰。
+        Section("Import");
+        ImportOptions importOptions{};
+        ok &= Check(CgSucceeded(engine.GetIoRegistry()->Import(options.importPath.c_str(),
+                                                              importOptions, nullptr, nullptr)),
+                    "imported the model");
+        if (!ok) {
+            std::printf("         %s\n", engine.GetLastErrorMessage());
+        }
+        std::printf("         %u entit(y|ies)\n", engine.GetScene()->GetEntityCount());
+        ok &= Check(engine.GetScene()->GetBounds(sceneBounds), "the scene reports its bounds");
+        camera->SetStandardView(StandardView::Isometric);
+        camera->ZoomToFit(nullptr, 1.25);
+    } else {
+        Section("Drawing");
+        BuildDemoDrawing(*engine.GetScene());
+        ok &= Check(engine.GetScene()->GetEntityCount() == 16, "built the demo drawing");
+        ok &= Check(engine.GetScene()->GetBounds(sceneBounds), "the scene reports its bounds");
+        // Top reads as a drawing, which is what the orthographic default is for;
+        // isometric is where the geometry on the other two work planes shows up.
+        camera->SetStandardView(options.perspective ? StandardView::Isometric : StandardView::Top);
+        camera->ZoomToFit(nullptr, 1.25);
 
-    Section("Tools");
-    ok &= DriveTools(engine, *viewport);
+        // The tool drive knows which entity is which by index, so it only makes
+        // sense on the drawing it was written against.
+        Section("Tools");
+        ok &= DriveTools(engine, *viewport);
+    }
+
+    if (!options.exportPath.empty()) {
+        Section("Export");
+        ExportOptions exportOptions{};
+        const CgResult written = engine.GetIoRegistry()->Export(options.exportPath.c_str(),
+                                                                exportOptions, nullptr, nullptr);
+        ok &= Check(CgSucceeded(written), "wrote the scene");
+        std::printf("         %s\n", CgSucceeded(written) ? options.exportPath.c_str()
+                                                          : engine.GetLastErrorMessage());
+    }
 
     if (!options.headless) {
         // Back to a view that shows the off-plane geometry, and out of the
@@ -877,6 +985,19 @@ int main(int argc, char** argv) {
     const uint64_t objectsBefore = CadGeom_GetLiveObjectCount();
 
 #if CADGEOM_DEMO_HEAP_CHECK
+    // Pay the file layer's one-time costs before the checkpoint. Reading and
+    // writing pull in locale facets that the C++ runtime keeps until the process
+    // exits — a real allocation, but not a leak, and not one the engine can
+    // return. Charging it to the engine would make this check cry wolf, and a
+    // check that cries wolf gets switched off.
+    WarmUpFileIo(desc);
+
+    // The CRT's own report goes to the debugger by default, which is nowhere at
+    // all when this runs in a console. Send it to stdout so a failure below
+    // arrives with the evidence attached.
+    _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_WARN, _CRTDBG_FILE_STDOUT);
+
     _CrtMemState heapBefore;
     _CrtMemCheckpoint(&heapBefore);
 #endif

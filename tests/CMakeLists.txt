@@ -13,7 +13,8 @@ add_executable(cadgeom_tests
     test_extrude.cpp
     test_picking.cpp
     test_commands.cpp
-    test_io_registry.cpp)
+    test_io_registry.cpp
+    test_io.cpp)
 
 target_link_libraries(cadgeom_tests PRIVATE CadGeom::cadgeom Catch2::Catch2WithMain)
 target_include_directories(cadgeom_tests PRIVATE "${CMAKE_SOURCE_DIR}/src")

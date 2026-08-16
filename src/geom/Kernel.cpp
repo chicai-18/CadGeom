@@ -266,10 +266,29 @@ CgResult ValidateShapeDef(const ShapeDef& def) {
                                    p.extrude.options, loops);
         }
 
-        case ShapeType::Mesh:
-            return core::SetError(CgResult::NotImplemented,
-                                  "Mesh geometry is built by the IO handlers, which land in "
-                                  "milestone M5");
+        case ShapeType::Mesh: {
+            // 导入的网格没有参数可校验，只有三角形本身：下标越界的网格画出来是
+            // 一次越界读，而不是一块难看的几何。
+            if (!def.mesh) {
+                return core::SetError(CgResult::InvalidArgument,
+                                      "Mesh: no triangle data; a mesh shape comes from an "
+                                      "importer, not from parameters");
+            }
+            const MeshData& mesh = *def.mesh;
+            if (mesh.indices.empty() || mesh.indices.size() % 3 != 0) {
+                return core::SetError(CgResult::InvalidArgument,
+                                      "Mesh: %zu index/indices is not a whole number of triangles",
+                                      mesh.indices.size());
+            }
+            for (const uint32_t index : mesh.indices) {
+                if (index >= mesh.vertices.size()) {
+                    return core::SetError(CgResult::InvalidArgument,
+                                          "Mesh: index %u is out of range (%zu vertices)", index,
+                                          mesh.vertices.size());
+                }
+            }
+            return CgResult::Ok;
+        }
 
         case ShapeType::None:
         default:

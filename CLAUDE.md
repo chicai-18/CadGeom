@@ -7,8 +7,8 @@ break by accident.
 
 ## Current state
 
-Milestone **M4 complete** (profile triangulation, extrude + topology, `EdgePass`,
-`ExtrudeTool`). See `docs/architecture.md` §9 for the plan.
+Milestone **M5 complete** (OBJ and glTF read/write, `extras` parametric
+round-trip, `ShapeType::Mesh`). See `docs/architecture.md` §9 for the plan.
 
 | | Status |
 |---|---|
@@ -22,7 +22,7 @@ Milestone **M4 complete** (profile triangulation, extrude + topology, `EdgePass`
 | BVH, `Raycast`/`Pick`/`SetWorkPlaneFromPick`, selection highlight, Move/Rotate gizmos | Working |
 | Snapping | Working except `Snap_Perpendicular` — see below |
 | `Extrude`, solid topology, per-face picking, `ExtrudeTool` | Working |
-| OBJ / glTF handlers, `ShapeType::Mesh` | **M5** |
+| OBJ / glTF / GLB read + write, `extras` round-trip, `ShapeType::Mesh` | Working — `ExportOptions::embedTextures` is inert, nothing has textures yet |
 | MSAA, ImGui panels, overlay text, Scale/Measure tools | **M6** — `ViewportDesc::sampleCount` is ignored with a warning |
 | `RenderMode::HiddenLine` | **M6** — behaves as `ShadedWithEdges` for now |
 
@@ -70,7 +70,9 @@ Two consequences already bite:
   `geom::ShapeDef` carries the points; that is the internal type and it is free
   to hold STL. The same gap is why `ExtrudeTool` can preview the top face of a
   circle or a rectangle exactly but draws only a height guide for a polyline —
-  a tool sees what a host sees, and neither can read those points back.
+  a tool sees what a host sees, and neither can read those points back. A *file*
+  has no such limit: glTF's `extras` carries the point list, so a polyline
+  survives a round trip intact even though the public getter cannot report it.
 - `IToolContext::SnapAt` takes a pixel and nothing else, so there is nowhere to
   pass the reference point a perpendicular snap is measured *from*. Every other
   `SnapType` works; `Snap_Perpendicular` waits for an extension interface in M6.
@@ -110,6 +112,14 @@ which is why it can sit that low. `IScene` must stay `SceneImpl`'s **first** bas
 the host's `IScene*` points at the primary subobject, and moving it would change
 what that pointer means.
 
+`io/` inverts it the same way, through `io::ISceneSource` (read) and
+`io::ISceneSink` (write), implemented by `api::SceneIoBridge`. It needs its own
+door because the public interfaces genuinely cannot serve it: `IScene` has no way
+to read a mesh, and `IGeometryBuilder` has no `MakeMesh`. That is not an
+oversight to patch — a host is handed a parametric CAD scene, and the triangles
+under it are an internal cache. The bridge is a separate object rather than two
+more bases on `SceneImpl` for the same reason as the rule above.
+
 ## Conventions
 
 - **Z-up, right-handed.** glTF's Y-up is converted in the IO layer, nowhere else.
@@ -129,7 +139,15 @@ what that pointer means.
   `Tessellate` writes a mesh or a wire. Changing a radius marks the cache dirty
   and re-tessellates — it never edits triangles. Anything that invalidates a
   cache must also bump the scene revision, or the renderer keeps drawing the old
-  geometry.
+  geometry. The one shape with no parameters behind it is `ShapeType::Mesh`,
+  whose triangles arrive from a file and live in `geom::ShapeDef::mesh` — the
+  *definition*, not the cache. Its `Tessellate` copies them across and finds its
+  feature edges; changing the chord tolerance cannot regenerate what nobody
+  generated.
+- **An importer that finds parameters ignores the triangles beside them.** A
+  glTF node with `extras.cadgeom.shape` is rebuilt from the parameters and its
+  mesh is dropped on the floor. Trusting the mesh instead would let a stale cache
+  redefine the truth, which is the one direction this whole design forbids.
 - **Every scene mutation goes through `ICommand`** so undo/redo stays free —
   including delete. Two consequences worth knowing:
   - A command that runs *while the stack is running one* (a host `Undo()` that
@@ -154,6 +172,13 @@ what that pointer means.
   `LinePass`. A smooth face (a cylinder's side) contributes no vertical edges and
   no topology vertices at all — those points are tessellation artefacts, and
   emitting them would put a snap target every six degrees around a circle.
+- **An imported mesh gets the same treatment, recovered from the triangles.**
+  `geom::BuildFeatureEdges` welds by position, keeps the edges whose two faces
+  meet at more than 30°, and chains them: an imported box yields twelve
+  one-segment edges and eight corners, an imported cylinder two closed rings and
+  no corners at all. The threshold is deliberately far above the ~12° between
+  adjacent facets of a tessellated curve — anything tighter draws the
+  tessellation instead of the part.
 - **The depth offset that keeps edges off their own surface lives in `MeshPass`**,
   as a rasterizer depth bias pushing faces *back*. Its unit is the depth buffer's
   own resolution, so it works for a one-metre part and a one-millimetre part
@@ -164,6 +189,17 @@ what that pointer means.
   1.0, and neither can dash. Dash phase comes from per-segment arc length times
   `lineParams.x` (pixels per world unit), which is exact in orthographic and
   approximate in perspective.
+- **One import is one undo step, or none at all.** `io::ISceneSink::Begin` opens
+  a command group and `End(false)` aborts it through
+  `CommandStackImpl::AbortGroup`, which undoes and discards without leaving a
+  redo entry — a half-read file must not be recoverable from the Redo menu. The
+  exception is `ImportOptions::mergeIntoScene = false`, which clears the scene
+  and the undo stack with it; that import cannot be undone, and the header says
+  so.
+- **Paths are UTF-8, so nothing opens a file with narrow `fopen`.** `core/File.h`
+  widens on Windows, and both third-party readers are handed bytes rather than a
+  filename for exactly that reason (`tinygltf`'s and `tinyobjloader`'s own file
+  entry points take the active code page).
 - Angles are radians unless the name says `Deg`.
 - Every impl object embeds a `core::ObjectTracker`; `CadGeom_GetLiveObjectCount()`
   must return to its baseline after teardown. The tests and the demo both assert
@@ -211,6 +247,12 @@ build/bin/Debug/glfw_viewer.exe
 build/bin/Debug/glfw_viewer.exe --headless --screenshot shot.png
 build/bin/Debug/glfw_viewer.exe --headless --perspective --screenshot iso.png
 build/bin/Debug/glfw_viewer.exe --perspective --frames 300
+
+# The file round trip, on the command line: write what the demo drew, then look
+# at it again. --import replaces the built-in drawing (and the tool drive with
+# it, since that one knows its entities by index).
+build/bin/Debug/glfw_viewer.exe --headless --export part.glb --frames 1
+build/bin/Debug/glfw_viewer.exe --import part.glb
 ```
 
 Targets: `cadgeom` (the only shipped artifact), `cadgeom_tests`, `glfw_viewer`.
@@ -239,3 +281,11 @@ its own dependencies.
 
 Submodules are pinned to release tags and shallow-cloned. Each is wired into
 CMake at the milestone that first needs it, listed in the root `CMakeLists.txt`.
+
+tinyobjloader and tinygltf are header-plus-one-source libraries, and we
+instantiate them ourselves (`src/io/TinyObjImpl.cpp`, `src/io/TinyGltfImpl.cpp`)
+instead of linking their CMake targets. The switches that matter —
+`TINYOBJLOADER_USE_DOUBLE`, and no stb_image in tinygltf — change the layout of
+types both libraries expose, so every translation unit that sees those headers
+must agree. That is what `io/ObjCommon.h` and `io/GltfCommon.h` are for: include
+those, never the upstream header directly.

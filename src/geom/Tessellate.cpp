@@ -8,6 +8,13 @@
 namespace cadgeom::geom {
 namespace {
 
+/// 导入网格的折角阈值：超过它的棱当特征边画出来。
+///
+/// 30° 是挑出来的：一个 32 段的圆柱侧面每两个面之间只差 11°，不该长出竖线；而一块
+/// 板子上任何一个真的倒角都远比 30° 陡。用 TessParams::angularTolerance（默认 12°）
+/// 的话，前者会被整整齐齐地画满竖线 —— 那不是零件上的边，是细分的痕迹。
+constexpr double kMeshCreaseAngle = 30.0 * kDegToRad;
+
 /// Appends the sampled points of a closed loop and wires them into a chain.
 void AppendClosedLoop(PolylineData& out, const Vec3d* points, uint32_t count) {
     const auto first = static_cast<uint32_t>(out.positions.size());
@@ -99,11 +106,18 @@ bool Tessellate(Shape& shape, const TessParams& tess) {
             break;
         }
 
-        case ShapeType::Mesh:
-            // 导入的网格由 M5 的 IO 处理器直接填 `mesh`，不从这儿过。
-            core::SetError(CgResult::NotImplemented,
-                           "Mesh geometry arrives with the IO handlers in milestone M5");
-            return false;
+        case ShapeType::Mesh: {
+            // 导入的网格没有可以重新生成三角形的参数，定义本身就是那堆三角形。这里
+            // 唯一的「细分」是把它抄进缓存，再从三角形里认出特征边 —— 没有那些边，
+            // ShadedWithEdges 下一个导进来的立方体会是一团没有轮廓的灰。
+            if (!shape.def.mesh) {
+                core::SetError(CgResult::InvalidState, "Mesh: the shape carries no triangle data");
+                return false;
+            }
+            shape.mesh = *shape.def.mesh;
+            BuildFeatureEdges(shape.mesh, kMeshCreaseAngle, shape.wire, shape.topology);
+            break;
+        }
 
         case ShapeType::None:
         default:

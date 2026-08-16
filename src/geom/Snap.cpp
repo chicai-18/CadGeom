@@ -128,6 +128,9 @@ void CollectSnapPoints(const Shape& shape, const Mat4d& world, uint32_t mask,
             break;
         }
 
+        // 实体和导入的网格走同一条路：两者的特征点都只能从拓扑里来。区别只在拓扑
+        // 是怎么得到的 —— 实体是扫掠时一起生成的，网格是从三角形里认出来的。
+        case ShapeType::Mesh:
         case ShapeType::Solid: {
             const Topology& topo = shape.topology;
             for (const uint32_t index : topo.vertices) {
@@ -152,10 +155,8 @@ void CollectSnapPoints(const Shape& shape, const Mat4d& world, uint32_t mask,
             break;
         }
 
-        case ShapeType::Mesh:
         case ShapeType::None:
         default:
-            // 导入网格没有参数化定义可谈，特征点得等 M5 从拓扑重建出来。
             break;
     }
 }

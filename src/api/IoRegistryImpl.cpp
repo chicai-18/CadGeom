@@ -163,7 +163,8 @@ CgResult IoRegistryImpl::Import(const char* utf8Path, const ImportOptions& optio
     const Handlers* h = Lookup(ext);
     if (!h || !h->importer) {
         return core::SetError(CgResult::NotSupported,
-                              "Import: no importer for '.%s'; OBJ and glTF land in milestone M5",
+                              "Import: no importer for '.%s'; the engine reads obj, gltf and glb, "
+                              "and a host can register anything else through Register()",
                               ext.c_str());
     }
 
@@ -189,7 +190,8 @@ CgResult IoRegistryImpl::Export(const char* utf8Path, const ExportOptions& optio
     const Handlers* h = Lookup(ext);
     if (!h || !h->exporter) {
         return core::SetError(CgResult::NotSupported,
-                              "Export: no exporter for '.%s'; OBJ and glTF land in milestone M5",
+                              "Export: no exporter for '.%s'; the engine writes obj, gltf and glb, "
+                              "and a host can register anything else through Register()",
                               ext.c_str());
     }
 

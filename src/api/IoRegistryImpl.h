@@ -12,10 +12,11 @@ namespace cadgeom::api {
 
 class EngineImpl;
 
-/// The extension point itself is complete as of M0 — registration, ownership,
-/// extension dispatch. What is missing is any handler to dispatch *to*: the OBJ
-/// and glTF readers land in M5 (docs/architecture.md §7). A host that already
-/// has its own format can register it today and it will work.
+/// @brief 扩展名 → 处理器的分派表（docs/architecture.md §7）。
+///
+/// 注册、所有权、按扩展名分派都在这里。引擎自带的 OBJ / glTF / GLB 处理器由
+/// `io::RegisterBuiltinFormats` 在引擎创建时注册进来，走的是宿主注册自己格式时走的
+/// 同一条路 —— 它们没有任何特权，宿主可以用自己的实现把其中任何一个覆盖掉。
 class IoRegistryImpl final : public IIoRegistry {
 public:
     explicit IoRegistryImpl(EngineImpl& engine);

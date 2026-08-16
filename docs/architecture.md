@@ -98,8 +98,11 @@ CadGeom/
 │   │   └─ tools/             Select/Point/Line/Circle/Rect/Extrude/Move/Rotate
 │   ├─ io/
 │   │   ├─ Registry.h/.cpp    格式 → Importer/Exporter 工厂
+│   │   ├─ SceneAccess.h      ★ ISceneSource / ISceneSink，io/ 看场景的两面
+│   │   ├─ Axis.h             Z-up ↔ Y-up，全引擎只此一处
 │   │   ├─ ObjIO.cpp          tinyobjloader + 自写 writer
-│   │   └─ GltfIO.cpp         tinygltf（.gltf / .glb）
+│   │   ├─ GltfIO.cpp         tinygltf（.gltf / .glb）+ extras 参数化编解码
+│   │   └─ *Common.h/Tiny*Impl.cpp  第三方库的开关与唯一实现单元
 │   └─ api/                   *Impl.cpp + 工厂导出函数
 ├─ shaders/                   GLSL → SPIR-V → 嵌入 DLL
 ├─ external/                  submodules
@@ -429,6 +432,39 @@ class IIoRegistry {
 
 这一手让 glTF 事实上成为 CadGeom 的原生格式，省掉自研文件格式。轴向在此层做 Z-up ↔ Y-up 转换。
 
+M5 的落地细节：
+
+- **`io/` 也把依赖箭头倒过来。** 实体表和几何内核在 `api/`，在 `io/` 之上，所以 `io/` 声明
+  `ISceneSource` / `ISceneSink`，由 `api::SceneIoBridge` 实现并把数据递下去 —— 和 `interact/`
+  的 `IPickTargetSource` 是同一手。它需要自己的门，是因为公开接口确实给不了这两件事：`IScene`
+  没有读网格的入口，`IGeometryBuilder` 也没有 `MakeMesh`。那不是疏漏 —— 宿主拿到的是一个参数化
+  的 CAD 场景，底下的三角形是内部缓存。
+- **换轴挂在根节点上，不烤进顶点里。** 导出时整棵场景挂在一个绕 X 转 -90° 的根节点下面。顶点
+  和 `extras` 因此都留在对象空间，两者永远对得上；导入时把这次旋转叠回顶层节点，我们自己写的
+  文件里那两次旋转正好抵消，往返一遍一个多余的角度都不剩。烤进顶点的话，`extras` 里的对象空间
+  参数就和顶点各说各话了。
+- **参数在，就不读那堆三角形。** 带 `extras.cadgeom.shape` 的节点是从参数重建的，同一个节点上的
+  网格被有意丢掉。信网格等于让缓存反过来定义真相 —— 而这正是 §3.1 唯一禁止的方向。
+- **导入的网格自己就是定义。** `ShapeType::Mesh` 的三角形存在 `geom::ShapeDef::mesh` 里，不是
+  缓存：没有任何参数能重新生成它们，改细分容差自然也不会。`Tessellate` 对它只做两件事 —— 抄进
+  缓存，然后把特征边认出来。
+- **特征边是从三角形汤里认回来的。** 按位置焊接，保留两面夹角超过 30° 的棱和只有一个面用到的
+  边界边，再按连通性串成链：导进来的立方体得到 12 条单段棱和 8 个角点，圆柱得到两条闭合的端面
+  圈、一个角点都没有。30° 这个阈值远高于细分曲面上相邻面之间的 ~12°，否则画出来的是细分的痕迹，
+  不是零件的边。CAD 的可读性靠黑边，而三角形汤里没有「边」这个概念。
+- **一次导入是一步撤销，要么就一步都不留。** `ISceneSink::Begin` 开一个命令组，`End(false)` 走
+  `CommandStackImpl::AbortGroup` 整批撤销并丢弃 —— 读到一半的文件不该能从「重做」菜单里捞回来。
+  例外是 `mergeIntoScene = false`：清空场景连撤销栈一起清，那次导入撤不回来，头文件里写着。
+- **OBJ 是有损的，而且损在明处。** 没有层级、没有变换、没有参数化定义，顶点写的是世界坐标。曲线
+  走 `l`、点图元走 `p`（绝大多数导出器直接把它们丢了），读回来是折线和点 —— 一个圆出去是折线，
+  回来还是折线。要保住参数化就用 glTF。
+- **精度的两条线。** `extras` 里的参数是 double，往返分毫不差；而 glTF 的 POSITION 按规范只能是
+  float32，所以**没有**参数化定义的实体（导入的网格）往返一次是 float 精度。OBJ 写的是十位有效
+  数字的文本，读回来用 `TINYOBJLOADER_USE_DOUBLE`，不经过 float。
+- **路径是 UTF-8，所以谁都不许自己开文件。** 两个第三方库自带的文件入口收的都是 narrow 路径
+  （Windows 上就是当前代码页），中文目录下直接打不开。字节由 `core/File.h` 读进来交给它们解析，
+  写出来的字节也由它落盘。
+
 ---
 
 ## 8. 构建系统
@@ -484,7 +520,7 @@ install/
 | **M2 几何与线条** ✅ | 内核 + 点/线/圆/矩形、`LinePass`(屏幕空间)、`PointPass`、Tool 状态机、WorkPlane | 鼠标能交互画出点/线/圆/矩形，线宽正确、虚线可用 |
 | **M3 选择与操作** ✅ | BVH、Picker（点/边/面优先级）、Selection 高亮、Gizmo、吸附、CommandStack | 能选中、拖动、旋转，Ctrl+Z/Y 正常 |
 | **M4 拉伸成体** ✅ | Profile 三角化、Extrude + Topology、`EdgePass`、`ExtrudeTool` | 圆→圆柱、矩形→立方体，交互式拖拽高度，带轮廓黑边 |
-| **M5 数据 IO** | IoRegistry、OBJ 读写、glTF 读写、`extras` 参数化往返 | 导出再导入，参数化信息不丢；Blender 能正常打开 |
+| **M5 数据 IO** ✅ | IoRegistry、OBJ 读写、glTF 读写、`extras` 参数化往返、`ShapeType::Mesh` | 导出再导入，参数化信息不丢；Blender 能正常打开 |
 | **M6 打磨** | 吸附、ImGui 面板、多视口、Zoom-to-fit、单位系统 | 可用性达到「能拿来干活」 |
 
 ---

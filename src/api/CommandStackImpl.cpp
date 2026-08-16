@@ -219,6 +219,28 @@ void CommandStackImpl::EndGroup() {
     scene_.BumpRevision();
 }
 
+void CommandStackImpl::AbortGroup() {
+    if (groupDepth_ == 0) {
+        CG_WARN("AbortGroup without an open group");
+        return;
+    }
+    groupDepth_ = 0;
+    GroupCommand* aborted = group_;
+    group_ = nullptr;
+    if (!aborted) {
+        return;
+    }
+
+    {
+        // 和 Undo() 一样标记「正在跑命令」：撤销途中被触发的 Push 属于这一组，
+        // 不该变成一条新的栈条目。
+        const Running guard(running_);
+        aborted->Undo(scene_.AsInterface());
+    }
+    aborted->Release();
+    scene_.BumpRevision();
+}
+
 void CommandStackImpl::Clear() {
     for (ICommand* c : undo_) {
         c->Release();

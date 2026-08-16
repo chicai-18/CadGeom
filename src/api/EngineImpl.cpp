@@ -9,6 +9,7 @@
 #include "interact/tools/DrawTools.h"
 #include "interact/tools/ExtrudeTool.h"
 #include "interact/tools/TransformTools.h"
+#include "io/Registry.h"
 
 #if CADGEOM_HAS_VULKAN
 #include "api/ViewportImpl.h"
@@ -46,6 +47,7 @@ EngineImpl::EngineImpl(const EngineDesc& desc)
       validation_(desc.enableValidation),
       scene_(),
       tools_(*this),
+      ioBridge_(scene_),
       io_(*this) {
     g_liveEngines.fetch_add(1, std::memory_order_relaxed);
 
@@ -56,6 +58,14 @@ EngineImpl::EngineImpl(const EngineDesc& desc)
     interact::RegisterExtrudeTool(tools_, tools_.Settings());
     interact::RegisterTransformTools(tools_, tools_.Settings());
     tools_.Activate(ToolId::Select);
+
+    // 内置的 OBJ / glTF 处理器走的是宿主注册自己格式时走的同一条路，一点特权都没有
+    // （docs/architecture.md §7）。注册不上不该拖垮整个引擎：几何和场景照常可用，
+    // 只是读不了文件。
+    if (CgFailed(io::RegisterBuiltinFormats(io_, ioBridge_, ioBridge_))) {
+        CG_WARN("built-in file formats are unavailable: %s", core::LastErrorMessage());
+        core::ClearError();
+    }
 
     CG_INFO("engine created for '%s' (kernel=%s, validation=%s)", appName_.c_str(),
             kernelType_ == KernelType::Simple ? "Simple" : "Occt",

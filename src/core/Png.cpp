@@ -1,15 +1,12 @@
 #include "core/Png.h"
 
 #include "core/Error.h"
+#include "core/File.h"
 
 #include <stdio.h>
 #include <string.h>
 
 #include <vector>
-
-#if defined(_WIN32)
-#include <windows.h>
-#endif
 
 namespace cadgeom::core {
 namespace {
@@ -85,26 +82,6 @@ std::vector<uint8_t> ZlibStore(const std::vector<uint8_t>& raw) {
     return out;
 }
 
-FILE* OpenForWrite(const char* utf8Path) {
-#if defined(_WIN32)
-    // fopen on Windows takes the active code page, which mangles any path with
-    // a non-ASCII character in it. The public API promises UTF-8, so convert.
-    const int wideLength = MultiByteToWideChar(CP_UTF8, 0, utf8Path, -1, nullptr, 0);
-    if (wideLength <= 0) {
-        return nullptr;
-    }
-    std::vector<wchar_t> wide(static_cast<size_t>(wideLength));
-    MultiByteToWideChar(CP_UTF8, 0, utf8Path, -1, wide.data(), wideLength);
-    FILE* file = nullptr;
-    if (_wfopen_s(&file, wide.data(), L"wb") != 0) {
-        return nullptr;
-    }
-    return file;
-#else
-    return fopen(utf8Path, "wb");
-#endif
-}
-
 } // namespace
 
 CgResult WritePng(const char* utf8Path, uint32_t width, uint32_t height, const uint8_t* rgba,
@@ -140,17 +117,7 @@ CgResult WritePng(const char* utf8Path, uint32_t width, uint32_t height, const u
     PushChunk(file, "IDAT", ZlibStore(raw));
     PushChunk(file, "IEND", {});
 
-    FILE* out = OpenForWrite(utf8Path);
-    if (!out) {
-        return SetError(CgResult::IoError, "cannot open '%s' for writing", utf8Path);
-    }
-    const size_t written = fwrite(file.data(), 1, file.size(), out);
-    fclose(out);
-
-    if (written != file.size()) {
-        return SetError(CgResult::IoError, "short write to '%s'", utf8Path);
-    }
-    return CgResult::Ok;
+    return WriteFile(utf8Path, file.data(), file.size());
 }
 
 } // namespace cadgeom::core

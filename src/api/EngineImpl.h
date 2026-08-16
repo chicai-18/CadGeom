@@ -4,6 +4,7 @@
 
 #include "api/IoRegistryImpl.h"
 #include "api/SceneImpl.h"
+#include "api/SceneIo.h"
 #include "api/ToolManagerImpl.h"
 #include "core/ObjectTracker.h"
 
@@ -83,6 +84,9 @@ private:
 
     SceneImpl scene_;
     ToolManagerImpl tools_;
+    /// 声明在 io_ 之前：注册表销毁时会 Release 掉内置处理器，而那些处理器抓着这座
+    /// 桥的引用。反过来排的话，最后一批处理器会向一个已经没了的对象告别。
+    SceneIoBridge ioBridge_;
     IoRegistryImpl io_;
 
     std::vector<IViewport*> viewports_;
