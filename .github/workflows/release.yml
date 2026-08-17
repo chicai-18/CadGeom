@@ -120,9 +120,12 @@ jobs:
 
       - name: 构建、测试、打包
         run: |
-          $pkgArgs = @('-Version', '${{ steps.ver.outputs.version }}')
+          # 必须是哈希表。数组 splat 是按「位置」传的，数组里的 '-Version' 不会
+          # 被当成参数名 —— 它会变成 $Version 的值，然后 '1.0.0' 落到下一个位置
+          # 参数 $Config 上，撞死在它的 ValidateSet 里。
+          $pkgArgs = @{ Version = '${{ steps.ver.outputs.version }}' }
           if ($env:QT_PREFIX) {
-              $pkgArgs += @('-QtPrefix', $env:QT_PREFIX)
+              $pkgArgs['QtPrefix'] = $env:QT_PREFIX
           } else {
               Write-Warning 'Qt 没装上，这个包里不会有 qt_viewer'
           }
