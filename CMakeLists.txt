@@ -280,6 +280,8 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${CADGEOM_SOURCES} ${CADGE
 
 if(CADGEOM_BUILD_EXAMPLES)
     add_subdirectory(examples/glfw_viewer)
+    # 嵌入宿主 UI 的那一半（SurfaceKind::NativeWin32）。找不到 Qt 就自己跳过。
+    add_subdirectory(examples/qt_viewer)
 endif()
 
 if(CADGEOM_BUILD_TESTS)

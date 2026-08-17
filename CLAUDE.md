@@ -314,7 +314,32 @@ build/bin/Debug/glfw_viewer.exe --headless --export part.glb --frames 1
 build/bin/Debug/glfw_viewer.exe --import part.glb
 ```
 
-Targets: `cadgeom` (the only shipped artifact), `cadgeom_tests`, `glfw_viewer`.
+Targets: `cadgeom` (the only shipped artifact), `cadgeom_tests`, `glfw_viewer`,
+`qt_viewer`.
+
+`qt_viewer` (`examples/qt_viewer/`, its own README) is the other half of the
+surface story: `glfw_viewer` lets the engine own the window, this one embeds a
+viewport in a host UI through `SurfaceKind::NativeWin32` — menus, toolbar, model
+tree, engine log, status line, and every `ToolId` behind a shortcut. Qt is not
+vendored, so it only builds when CMake can find it, and skips itself with a
+message when it cannot:
+
+```sh
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 \
+      -DCMAKE_PREFIX_PATH=D:/Qt/5.15.2/msvc2019_64
+build/bin/Debug/qt_viewer.exe
+# Same habit as the headless demo run: prove the embedded render path still
+# works without a hand on the mouse. Exit code 2 means an object leaked.
+build/bin/Debug/qt_viewer.exe --screenshot shot.png --frames 60
+```
+
+Three things that bite when embedding, all written up in that README: the widget
+must hand over a real HWND and stop painting (`WA_NativeWindow` +
+`WA_PaintOnScreen` + a null `paintEngine()`); mouse coordinates and sizes go to
+the engine in **physical** pixels (`GetClientRect`), not Qt's logical ones; and
+`IToolManager::Activate` only calls `ITool::OnActivate` once a context exists, so
+a host switching tools from a menu rather than from an event has to send one
+mouse event first or the new tool never gets its `Reset()`.
 
 In the window, `V X L C R Y` pick the Select/Point/Line/Circle/Rectangle/
 Polyline tools, `E` picks Extrude, `M` `T` `S` pick Move, Rotate and Scale (`R`
