@@ -258,6 +258,7 @@ try {
     # 少了只是包不够完整，日志里点名，不拦。
     $expected = @{
         'bin/qt_viewer.exe'   = 'Qt 示例（没给 -QtPrefix 就没有）'
+        'bin/mfc_viewer.exe'  = 'MFC 示例（构建机没装 VS 的 MFC 组件就没有）'
         'bin/platforms/'      = 'Qt 平台插件'
         'bin/msvcp140.dll'    = 'MSVC 运行时'
     }

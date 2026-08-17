@@ -33,7 +33,7 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  宿主应用 (examples/glfw_viewer, 未来的 Qt 客户端)             │
+│  宿主应用 (examples/ 下的 glfw_viewer / qt_viewer / mfc_viewer)│
 └───────────────────────────┬──────────────────────────────────┘
                             │ include/cadgeom/*.h  ← 唯一对外契约
 ┌───────────────────────────┴──────────────────────────────────┐
@@ -108,7 +108,9 @@ CadGeom/
 │   └─ api/                   *Impl.cpp + 工厂导出函数
 ├─ shaders/                   GLSL → SPIR-V → 嵌入 DLL
 ├─ external/                  submodules
-├─ examples/glfw_viewer/      独立可跑的 CAD 查看/建模 demo
+├─ examples/glfw_viewer/      独立可跑的 CAD 查看/建模 demo（引擎自带窗口）
+├─ examples/qt_viewer/        嵌进 Qt 宿主（SurfaceKind::NativeWin32）
+├─ examples/mfc_viewer/       同一件事，换 MFC 说一遍
 ├─ tests/                     几何内核 + IO + 拾取的单元测试（不依赖 Vulkan）
 └─ docs/
 ```
@@ -561,7 +563,9 @@ M6 补的是「能拿来干活」和「能跑起来」之间的差距：那些�
 CMake ≥ 3.24（当前环境 3.26.3 ✓）
 ├─ cadgeom            SHARED —— 唯一交付物
 ├─ cadgeom_tests      几何内核 / IO / 拾取单测（不依赖 Vulkan，CI 友好）
-└─ glfw_viewer        EXECUTABLE —— 独立 demo
+├─ glfw_viewer        EXECUTABLE —— 引擎自带窗口的独立 demo
+├─ qt_viewer          EXECUTABLE —— 嵌进 Qt 宿主；找不到 Qt 就整块跳过
+└─ mfc_viewer         EXECUTABLE —— 嵌进 MFC 宿主；没装 MFC 组件就整块跳过
 ```
 
 **Submodules（`external/`）**

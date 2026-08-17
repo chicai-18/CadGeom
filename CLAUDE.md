@@ -315,7 +315,7 @@ build/bin/Debug/glfw_viewer.exe --import part.glb
 ```
 
 Targets: `cadgeom` (the only shipped artifact), `cadgeom_tests`, `glfw_viewer`,
-`qt_viewer`.
+`qt_viewer`, `mfc_viewer`.
 
 `qt_viewer` (`examples/qt_viewer/`, its own README) is the other half of the
 surface story: `glfw_viewer` lets the engine own the window, this one embeds a
@@ -343,6 +343,27 @@ the engine in **physical** pixels (`GetClientRect`), not Qt's logical ones; and
 `IToolManager::Activate` only calls `ITool::OnActivate` once a context exists, so
 a host switching tools from a menu rather than from an event has to send one
 mouse event first or the new tool never gets its `Reset()`.
+
+`mfc_viewer` (`examples/mfc_viewer/`, its own README) is the same story told with
+MFC instead of Qt: the same `SurfaceKind::NativeWin32` path, the same menus, and
+the same self-check switches. It exists because the hard part of embedding is
+never the engine side, it is the *host framework's* own rules, and two hosts side
+by side separate the two. It needs the Visual Studio generator (`CMAKE_MFC_FLAG`
+is a VS-generator feature) and the MFC component, which the default C++ workload
+does **not** install; without either, CMake skips it with a message.
+
+```sh
+build/bin/Debug/mfc_viewer.exe --sample --screenshot shot.png --frames 60
+```
+
+Where Qt needs four widget attributes to hand a region over, MFC needs a window
+class with no background brush; where Qt scales by `devicePixelRatio`, this one
+declares per-monitor-v2 DPI awareness and client coordinates *are* physical
+pixels; Win32 has no implicit mouse grab, so `SetCapture` is explicit. Two things
+that bite are written up in that README: the `.rc` needs `#pragma
+code_page(65001)` or `rc.exe` eats a byte after every Chinese character, and
+`CToolBar::SetSizes` asserts on a 0×0 image size even though `TB_SETBITMAPSIZE(0,0)`
+is the documented way to say "this toolbar has no images".
 
 In the window, `V X L C R Y` pick the Select/Point/Line/Circle/Rectangle/
 Polyline tools, `E` picks Extrude, `M` `T` `S` pick Move, Rotate and Scale (`R`

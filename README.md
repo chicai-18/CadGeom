@@ -58,6 +58,12 @@ git submodule.
 ./build/bin/Debug/glfw_viewer.exe --import part.glb
 ```
 
+`glfw_viewer` lets the engine own the window. `examples/` also carries two
+*embedded* hosts — `qt_viewer` and `mfc_viewer` — where the host owns the window
+and the message loop and the engine only draws the 3D region
+(`SurfaceKind::NativeWin32`). Each has its own README, and each skips itself with
+a message when Qt or Visual Studio's MFC component is missing.
+
 | Option | Default | |
 |---|---|---|
 | `CADGEOM_BUILD_TESTS` | `ON` | Unit tests. No Vulkan dependency, CI-friendly. |
@@ -81,7 +87,7 @@ It configures, builds, runs the tests, and writes two archives into `dist/`:
 
 | | |
 |---|---|
-| `CadGeom-<ver>-windows-x64.zip` | `cadgeom.dll`, the import library, the public headers, the `find_package(CadGeom)` config, both viewers, and the runtime they need — Qt and the MSVC redistributable. Unzip and run. |
+| `CadGeom-<ver>-windows-x64.zip` | `cadgeom.dll`, the import library, the public headers, the `find_package(CadGeom)` config, the three viewers, and the runtime they need — Qt and the MSVC redistributable. Unzip and run. |
 | `CadGeom-<ver>-src-with-submodules.zip` | The source with `external/` filled in. GitHub's own "Source code" archive leaves the submodules out, and that one does not build. |
 
 `vulkan-1.dll` is deliberately not shipped. It belongs to the graphics driver and
@@ -144,7 +150,7 @@ src/render/        Vulkan RHI, passes, surfaces
 src/interact/      camera, work plane, picker, snapping, gizmo, tools, overlay
 src/api/           interface implementations + the exported factory
 shaders/           GLSL, compiled to SPIR-V and embedded in the DLL
-examples/          standalone demo
+examples/          the standalone demo, plus two embedded hosts (Qt, MFC)
 tests/             unit tests (never depend on Vulkan)
 external/          pinned submodules
 docs/              architecture

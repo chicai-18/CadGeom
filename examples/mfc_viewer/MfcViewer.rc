@@ -1,0 +1,433 @@
+// CadGeom — MFC 宿主示例的资源脚本。
+//
+// 手写的：没有 APSTUDIO 的 TEXTINCLUDE 块，也没有资源编辑器留下的坐标垃圾。
+// 用 VS 的资源编辑器打开它会被重排，改的时候直接改这个文件。
+//
+// #pragma code_page(65001)：这个文件是 UTF-8 且不带 BOM，rc.exe 默认按系统的
+// ANSI 代码页（这台机器上是 936）读，一个汉字就能把后面的字符吃掉。和源码那边
+// 的 /utf-8 是同一件事的两个开关。
+
+#pragma code_page(65001)
+
+#include "resource.h"
+#include <afxres.h>
+#include <winres.h>
+
+/////////////////////////////////////////////////////////////////////////////
+// 菜单
+//
+// 快捷键提示（\t 后面那截）只是文字，真正生效的是下面的 ACCELERATORS 表 ——
+// 两处必须自己对齐，MFC 不替谁检查。
+
+IDR_MAINFRAME MENU
+BEGIN
+    POPUP "文件(&F)"
+    BEGIN
+        MENUITEM "新建\tCtrl+N",                    ID_FILE_NEW
+        MENUITEM "载入示例图纸\tCtrl+Shift+N",      ID_FILE_SAMPLE
+        MENUITEM SEPARATOR
+        MENUITEM "打开…\tCtrl+O",                   ID_FILE_OPEN
+        MENUITEM "导入…\tCtrl+I",                   ID_FILE_IMPORT
+        MENUITEM SEPARATOR
+        MENUITEM "导出…\tCtrl+E",                   ID_FILE_EXPORT
+        MENUITEM "导出选中…\tCtrl+Shift+E",         ID_FILE_EXPORT_SELECTION
+        MENUITEM SEPARATOR
+        MENUITEM "保存截图…\tCtrl+P",               ID_FILE_SCREENSHOT
+        MENUITEM SEPARATOR
+        MENUITEM "退出\tCtrl+Q",                    ID_APP_EXIT
+    END
+    POPUP "编辑(&E)"
+    BEGIN
+        MENUITEM "撤销\tCtrl+Z",                    ID_EDIT_UNDO
+        MENUITEM "重做\tCtrl+Y",                    ID_EDIT_REDO
+        MENUITEM SEPARATOR
+        MENUITEM "删除\tDel",                       ID_EDIT_CLEAR
+        MENUITEM "全选\tCtrl+A",                    ID_EDIT_SELECT_ALL
+        MENUITEM "取消选择\tCtrl+Shift+A",          ID_EDIT_DESELECT
+        MENUITEM SEPARATOR
+        MENUITEM "重命名…\tF2",                     ID_EDIT_RENAME
+        MENUITEM "编辑参数…\tF4",                   ID_EDIT_PARAMS
+        MENUITEM "设置颜色…\tCtrl+Shift+C",         ID_EDIT_COLOR
+        POPUP "线型"
+        BEGIN
+            MENUITEM "实线",                        ID_LINESTYLE_SOLID
+            MENUITEM "虚线",                        ID_LINESTYLE_DASHED
+            MENUITEM "点线",                        ID_LINESTYLE_DOTTED
+            MENUITEM "点画线",                      ID_LINESTYLE_DASHDOT
+            MENUITEM "中心线",                      ID_LINESTYLE_CENTER
+            MENUITEM "隐藏线",                      ID_LINESTYLE_HIDDEN
+        END
+        MENUITEM "样式…\tCtrl+Shift+S",             ID_EDIT_STYLE
+        MENUITEM "变换…\tCtrl+T",                   ID_EDIT_TRANSFORM
+        MENUITEM "显示 / 隐藏\tCtrl+H",             ID_EDIT_VISIBLE
+        MENUITEM "编组…\tCtrl+G",                   ID_EDIT_GROUP
+        MENUITEM SEPARATOR
+        MENUITEM "撤销栈容量…",                     ID_EDIT_UNDO_CAPACITY
+        MENUITEM "清空撤销历史",                    ID_EDIT_CLEAR_HISTORY
+    END
+    POPUP "创建(&C)"
+    BEGIN
+        MENUITEM "选择\tV",                         ID_TOOL_SELECT
+        MENUITEM SEPARATOR
+        MENUITEM "点\tX",                           ID_TOOL_POINT
+        MENUITEM "直线\tL",                         ID_TOOL_LINE
+        MENUITEM "圆\tC",                           ID_TOOL_CIRCLE
+        MENUITEM "矩形\tR",                         ID_TOOL_RECTANGLE
+        MENUITEM "多段线\tY",                       ID_TOOL_POLYLINE
+        MENUITEM SEPARATOR
+        MENUITEM "拉伸\tE",                         ID_TOOL_EXTRUDE
+        MENUITEM SEPARATOR
+        MENUITEM "移动\tM",                         ID_TOOL_MOVE
+        MENUITEM "旋转\tT",                         ID_TOOL_ROTATE
+        MENUITEM "缩放\tS",                         ID_TOOL_SCALE
+        MENUITEM SEPARATOR
+        MENUITEM "按参数创建圆弧…",                 ID_CREATE_ARC
+        POPUP "工作平面"
+        BEGIN
+            MENUITEM "XY 平面（俯视）",             ID_WORKPLANE_XY
+            MENUITEM "YZ 平面（侧视）",             ID_WORKPLANE_YZ
+            MENUITEM "ZX 平面（正视）",             ID_WORKPLANE_ZX
+            MENUITEM SEPARATOR
+            MENUITEM "由光标下的面设定\tCtrl+W",    ID_WORKPLANE_FROM_PICK
+        END
+    END
+    POPUP "视图(&V)"
+    BEGIN
+        POPUP "标准视图"
+        BEGIN
+            MENUITEM "前视图\t1",                   ID_VIEW_STD_FRONT
+            MENUITEM "后视图\t2",                   ID_VIEW_STD_BACK
+            MENUITEM "右视图\t3",                   ID_VIEW_STD_RIGHT
+            MENUITEM "左视图\t4",                   ID_VIEW_STD_LEFT
+            MENUITEM "顶视图\t5",                   ID_VIEW_STD_TOP
+            MENUITEM "底视图\t6",                   ID_VIEW_STD_BOTTOM
+            MENUITEM "等轴测\t7",                   ID_VIEW_STD_ISO
+        END
+        MENUITEM SEPARATOR
+        MENUITEM "缩放至全部\tF",                   ID_VIEW_FIT
+        MENUITEM "缩放至选中\tShift+F",             ID_VIEW_FIT_SELECTION
+        MENUITEM "透视投影\tP",                     ID_VIEW_PERSPECTIVE
+        MENUITEM SEPARATOR
+        POPUP "渲染模式"
+        BEGIN
+            MENUITEM "着色",                        ID_RENDER_SHADED
+            MENUITEM "着色 + 特征边",               ID_RENDER_SHADED_EDGES
+            MENUITEM "线框",                        ID_RENDER_WIREFRAME
+            MENUITEM "隐藏线",                      ID_RENDER_HIDDENLINE
+            MENUITEM SEPARATOR
+            MENUITEM "轮换\tW",                     ID_RENDER_CYCLE
+        END
+        MENUITEM "显示网格\tG",                     ID_VIEW_GRID
+        MENUITEM "引擎自绘 HUD\tH",                 ID_VIEW_HUD
+        MENUITEM "背景色…",                         ID_VIEW_BACKGROUND
+        MENUITEM "相机参数…",                       ID_VIEW_CAMERA
+        MENUITEM SEPARATOR
+        POPUP "拾取过滤"
+        BEGIN
+            MENUITEM "顶点",                        ID_PICK_VERTEX
+            MENUITEM "边",                          ID_PICK_EDGE
+            MENUITEM "面",                          ID_PICK_FACE
+        END
+        MENUITEM SEPARATOR
+        MENUITEM "新建视口\tCtrl+Shift+V",          ID_VIEW_NEW_VIEWPORT
+        MENUITEM "只留一个视口\tCtrl+Shift+W",      ID_VIEW_CLOSE_EXTRA
+        MENUITEM SEPARATOR
+        MENUITEM "模型树",                          ID_VIEW_TREE_PANE
+        MENUITEM "引擎日志",                        ID_VIEW_LOG_PANE
+        MENUITEM "工具栏",                          ID_VIEW_TOOLBAR
+        MENUITEM "状态栏",                          ID_VIEW_STATUS_BAR
+    END
+    POPUP "捕捉(&S)"
+    BEGIN
+        MENUITEM "端点",                            ID_SNAP_ENDPOINT
+        MENUITEM "中点",                            ID_SNAP_MIDPOINT
+        MENUITEM "圆心",                            ID_SNAP_CENTER
+        MENUITEM "象限点",                          ID_SNAP_QUADRANT
+        MENUITEM "交点",                            ID_SNAP_INTERSECTION
+        MENUITEM "垂足",                            ID_SNAP_PERPENDICULAR
+        MENUITEM "栅格",                            ID_SNAP_GRID
+        MENUITEM SEPARATOR
+        MENUITEM "捕捉半径…",                       ID_SNAP_TOLERANCE
+        MENUITEM "连续绘制",                        ID_SNAP_CONTINUOUS
+        MENUITEM SEPARATOR
+        MENUITEM "细分精度…",                       ID_TESS_PARAMS
+    END
+    POPUP "测量(&M)"
+    BEGIN
+        MENUITEM "测量工具\tD",                     ID_TOOL_MEASURE
+        MENUITEM "最近一次测量…",                   ID_MEASURE_LAST_RESULT
+        MENUITEM "选中对象信息…",                   ID_ENTITY_INFO
+        MENUITEM SEPARATOR
+        MENUITEM "显示单位…\tCtrl+U",               ID_UNIT_SETTINGS
+    END
+    POPUP "帮助(&H)"
+    BEGIN
+        MENUITEM "快捷键…\tF1",                     ID_HELP_SHORTCUTS
+        POPUP "日志级别"
+        BEGIN
+            MENUITEM "Trace",                       ID_LOG_TRACE
+            MENUITEM "Debug",                       ID_LOG_DEBUG
+            MENUITEM "Info",                        ID_LOG_INFO
+            MENUITEM "Warning",                     ID_LOG_WARNING
+            MENUITEM "Error",                       ID_LOG_ERROR
+            MENUITEM "Fatal",                       ID_LOG_FATAL
+            MENUITEM "Off",                         ID_LOG_OFF
+        END
+        MENUITEM SEPARATOR
+        MENUITEM "关于 CadGeom…",                   ID_APP_ABOUT
+    END
+END
+
+/////////////////////////////////////////////////////////////////////////////
+// 快捷键
+//
+// 字母键在这里被菜单领走，落不到视口手里 —— 这正是「引擎拥有窗口」和「宿主拥有
+// 窗口」两种模式的分界（README「快捷键归谁」一节）。Esc 和 Enter 故意不在表里：
+// 它们是工具自己要的（取消手势、结束多段线）。
+//
+// VIRTKEY 的匹配是**精确**的：没写 SHIFT 就要求 Shift 是抬起的，所以 F 和
+// Shift+F 可以并存。
+
+IDR_MAINFRAME ACCELERATORS
+BEGIN
+    "N",            ID_FILE_NEW,                VIRTKEY, CONTROL, NOINVERT
+    "N",            ID_FILE_SAMPLE,             VIRTKEY, SHIFT, CONTROL, NOINVERT
+    "O",            ID_FILE_OPEN,               VIRTKEY, CONTROL, NOINVERT
+    "I",            ID_FILE_IMPORT,             VIRTKEY, CONTROL, NOINVERT
+    "E",            ID_FILE_EXPORT,             VIRTKEY, CONTROL, NOINVERT
+    "E",            ID_FILE_EXPORT_SELECTION,   VIRTKEY, SHIFT, CONTROL, NOINVERT
+    "P",            ID_FILE_SCREENSHOT,         VIRTKEY, CONTROL, NOINVERT
+    "Q",            ID_APP_EXIT,                VIRTKEY, CONTROL, NOINVERT
+    "Z",            ID_EDIT_UNDO,               VIRTKEY, CONTROL, NOINVERT
+    "Y",            ID_EDIT_REDO,               VIRTKEY, CONTROL, NOINVERT
+    "Z",            ID_EDIT_REDO,               VIRTKEY, SHIFT, CONTROL, NOINVERT
+    VK_DELETE,      ID_EDIT_CLEAR,              VIRTKEY, NOINVERT
+    "A",            ID_EDIT_SELECT_ALL,         VIRTKEY, CONTROL, NOINVERT
+    "A",            ID_EDIT_DESELECT,           VIRTKEY, SHIFT, CONTROL, NOINVERT
+    VK_F2,          ID_EDIT_RENAME,             VIRTKEY, NOINVERT
+    VK_F4,          ID_EDIT_PARAMS,             VIRTKEY, NOINVERT
+    "C",            ID_EDIT_COLOR,              VIRTKEY, SHIFT, CONTROL, NOINVERT
+    "S",            ID_EDIT_STYLE,              VIRTKEY, SHIFT, CONTROL, NOINVERT
+    "T",            ID_EDIT_TRANSFORM,          VIRTKEY, CONTROL, NOINVERT
+    "H",            ID_EDIT_VISIBLE,            VIRTKEY, CONTROL, NOINVERT
+    "G",            ID_EDIT_GROUP,              VIRTKEY, CONTROL, NOINVERT
+    "V",            ID_TOOL_SELECT,             VIRTKEY, NOINVERT
+    "X",            ID_TOOL_POINT,              VIRTKEY, NOINVERT
+    "L",            ID_TOOL_LINE,               VIRTKEY, NOINVERT
+    "C",            ID_TOOL_CIRCLE,             VIRTKEY, NOINVERT
+    "R",            ID_TOOL_RECTANGLE,          VIRTKEY, NOINVERT
+    "Y",            ID_TOOL_POLYLINE,           VIRTKEY, NOINVERT
+    "E",            ID_TOOL_EXTRUDE,            VIRTKEY, NOINVERT
+    "M",            ID_TOOL_MOVE,               VIRTKEY, NOINVERT
+    "T",            ID_TOOL_ROTATE,             VIRTKEY, NOINVERT
+    "S",            ID_TOOL_SCALE,              VIRTKEY, NOINVERT
+    "D",            ID_TOOL_MEASURE,            VIRTKEY, NOINVERT
+    "W",            ID_WORKPLANE_FROM_PICK,     VIRTKEY, CONTROL, NOINVERT
+    "1",            ID_VIEW_STD_FRONT,          VIRTKEY, NOINVERT
+    "2",            ID_VIEW_STD_BACK,           VIRTKEY, NOINVERT
+    "3",            ID_VIEW_STD_RIGHT,          VIRTKEY, NOINVERT
+    "4",            ID_VIEW_STD_LEFT,           VIRTKEY, NOINVERT
+    "5",            ID_VIEW_STD_TOP,            VIRTKEY, NOINVERT
+    "6",            ID_VIEW_STD_BOTTOM,         VIRTKEY, NOINVERT
+    "7",            ID_VIEW_STD_ISO,            VIRTKEY, NOINVERT
+    "F",            ID_VIEW_FIT,                VIRTKEY, NOINVERT
+    "F",            ID_VIEW_FIT_SELECTION,      VIRTKEY, SHIFT, NOINVERT
+    "P",            ID_VIEW_PERSPECTIVE,        VIRTKEY, NOINVERT
+    "W",            ID_RENDER_CYCLE,            VIRTKEY, NOINVERT
+    "G",            ID_VIEW_GRID,               VIRTKEY, NOINVERT
+    "H",            ID_VIEW_HUD,                VIRTKEY, NOINVERT
+    "V",            ID_VIEW_NEW_VIEWPORT,       VIRTKEY, SHIFT, CONTROL, NOINVERT
+    "W",            ID_VIEW_CLOSE_EXTRA,        VIRTKEY, SHIFT, CONTROL, NOINVERT
+    "U",            ID_UNIT_SETTINGS,           VIRTKEY, CONTROL, NOINVERT
+    VK_F1,          ID_HELP_SHORTCUTS,          VIRTKEY, NOINVERT
+END
+
+/////////////////////////////////////////////////////////////////////////////
+// 对话框
+//
+// 字号 9 的「微软雅黑」；机器上没有的话 Windows 自己换一个。控件位置是**对话框
+// 单位**，跟着字体走，所以高 DPI 下不用另做一套。
+
+IDD_ABOUTBOX DIALOGEX 0, 0, 300, 190
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "关于 CadGeom"
+FONT 9, "微软雅黑", 400, 0, 0x1
+BEGIN
+    EDITTEXT        IDC_ABOUT_TEXT, 10, 10, 280, 150, ES_MULTILINE | ES_READONLY | WS_VSCROLL | NOT WS_TABSTOP
+    DEFPUSHBUTTON   "确定", IDOK, 240, 168, 50, 14
+END
+
+IDD_INPUT DIALOGEX 0, 0, 240, 74
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "输入"
+FONT 9, "微软雅黑", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_INPUT_PROMPT, 12, 10, 216, 16
+    EDITTEXT        IDC_INPUT_EDIT, 12, 30, 216, 14, ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "确定", IDOK, 120, 52, 50, 14
+    PUSHBUTTON      "取消", IDCANCEL, 178, 52, 50, 14
+END
+
+IDD_PROGRESS DIALOGEX 0, 0, 240, 76
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION
+CAPTION "CadGeom"
+FONT 9, "微软雅黑", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_PROGRESS_TEXT, 12, 12, 216, 16
+    CONTROL         "", IDC_PROGRESS_BAR, "msctls_progress32", WS_BORDER, 12, 32, 216, 12
+    PUSHBUTTON      "取消", IDCANCEL, 178, 52, 50, 14
+END
+
+IDD_SHORTCUTS DIALOGEX 0, 0, 330, 300
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "快捷键"
+FONT 9, "微软雅黑", 400, 0, 0x1
+BEGIN
+    EDITTEXT        IDC_SHORTCUT_TEXT, 8, 8, 314, 264, ES_MULTILINE | ES_READONLY | WS_VSCROLL | NOT WS_TABSTOP
+    DEFPUSHBUTTON   "关闭", IDCANCEL, 272, 280, 50, 14
+END
+
+IDD_UNITS DIALOGEX 0, 0, 280, 192
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "显示单位"
+FONT 9, "微软雅黑", 400, 0, 0x1
+BEGIN
+    LTEXT           "模型单位（1.0 代表多长）", IDC_STATIC, 10, 14, 120, 12
+    COMBOBOX        IDC_UNIT_MODEL, 134, 12, 134, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "显示单位（读数用什么）", IDC_STATIC, 10, 34, 120, 12
+    COMBOBOX        IDC_UNIT_DISPLAY, 134, 32, 134, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "角度单位", IDC_STATIC, 10, 54, 120, 12
+    COMBOBOX        IDC_UNIT_ANGLE, 134, 52, 134, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "长度小数位", IDC_STATIC, 10, 76, 120, 12
+    EDITTEXT        IDC_UNIT_LINPREC, 134, 74, 40, 14, ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "角度小数位", IDC_STATIC, 10, 96, 120, 12
+    EDITTEXT        IDC_UNIT_ANGPREC, 134, 94, 40, 14, ES_AUTOHSCROLL | ES_NUMBER
+    CONTROL         "读数带单位后缀", IDC_UNIT_SUFFIX, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 134, 114, 134, 12
+    LTEXT           "单位只是显示层的事：换一个单位不会移动任何一个顶点，也不会让场景变脏。", IDC_STATIC, 10, 134, 258, 24
+    DEFPUSHBUTTON   "确定", IDOK, 160, 168, 50, 14
+    PUSHBUTTON      "取消", IDCANCEL, 218, 168, 50, 14
+END
+
+IDD_SHAPE_PARAMS DIALOGEX 0, 0, 300, 246
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "编辑参数"
+FONT 9, "微软雅黑", 400, 0, 0x1
+BEGIN
+    LTEXT           "", IDC_SP_VLABEL0, 10, 14, 86, 12
+    EDITTEXT        IDC_SP_VX0, 100, 12, 60, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_SP_VY0, 164, 12, 60, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_SP_VZ0, 228, 12, 60, 14, ES_AUTOHSCROLL
+    LTEXT           "", IDC_SP_VLABEL1, 10, 34, 86, 12
+    EDITTEXT        IDC_SP_VX1, 100, 32, 60, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_SP_VY1, 164, 32, 60, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_SP_VZ1, 228, 32, 60, 14, ES_AUTOHSCROLL
+    LTEXT           "", IDC_SP_VLABEL2, 10, 54, 86, 12
+    EDITTEXT        IDC_SP_VX2, 100, 52, 60, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_SP_VY2, 164, 52, 60, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_SP_VZ2, 228, 52, 60, 14, ES_AUTOHSCROLL
+    LTEXT           "", IDC_SP_SLABEL0, 10, 74, 86, 12
+    EDITTEXT        IDC_SP_SEDIT0, 100, 72, 60, 14, ES_AUTOHSCROLL
+    LTEXT           "", IDC_SP_SLABEL1, 10, 94, 86, 12
+    EDITTEXT        IDC_SP_SEDIT1, 100, 92, 60, 14, ES_AUTOHSCROLL
+    LTEXT           "", IDC_SP_SLABEL2, 10, 114, 86, 12
+    EDITTEXT        IDC_SP_SEDIT2, 100, 112, 60, 14, ES_AUTOHSCROLL
+    LTEXT           "", IDC_SP_SLABEL3, 10, 134, 86, 12
+    EDITTEXT        IDC_SP_SEDIT3, 100, 132, 60, 14, ES_AUTOHSCROLL
+    CONTROL         "", IDC_SP_CHK0, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 100, 154, 188, 12
+    CONTROL         "", IDC_SP_CHK1, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 100, 170, 188, 12
+    LTEXT           "", IDC_SP_NOTE, 10, 190, 278, 24
+    DEFPUSHBUTTON   "确定", IDOK, 180, 222, 50, 14
+    PUSHBUTTON      "取消", IDCANCEL, 238, 222, 50, 14
+END
+
+IDD_STYLE DIALOGEX 0, 0, 260, 226
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "对象样式"
+FONT 9, "微软雅黑", 400, 0, 0x1
+BEGIN
+    LTEXT           "颜色", IDC_STATIC, 10, 14, 70, 12
+    PUSHBUTTON      "", IDC_STYLE_COLOR, 86, 10, 90, 14, BS_OWNERDRAW
+    LTEXT           "特征边颜色", IDC_STATIC, 10, 34, 70, 12
+    PUSHBUTTON      "", IDC_STYLE_EDGECOLOR, 86, 30, 90, 14, BS_OWNERDRAW
+    LTEXT           "线宽（像素）", IDC_STATIC, 10, 54, 70, 12
+    EDITTEXT        IDC_STYLE_LINEWIDTH, 86, 52, 60, 14, ES_AUTOHSCROLL
+    LTEXT           "点大小（像素）", IDC_STATIC, 10, 74, 70, 12
+    EDITTEXT        IDC_STYLE_POINTSIZE, 86, 72, 60, 14, ES_AUTOHSCROLL
+    LTEXT           "线型", IDC_STATIC, 10, 94, 70, 12
+    COMBOBOX        IDC_STYLE_LINESTYLE, 86, 92, 90, 90, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    CONTROL         "可见", IDC_STYLE_VISIBLE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 86, 114, 150, 12
+    CONTROL         "可拾取", IDC_STYLE_SELECTABLE, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 86, 130, 150, 12
+    CONTROL         "投射阴影", IDC_STYLE_SHADOW, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 86, 146, 150, 12
+    LTEXT           "线宽和点大小是屏幕像素：线和点在顶点着色器里被展开成屏幕空间的四边形，所以它们不随缩放变粗变细。", IDC_STATIC, 10, 166, 240, 32
+    DEFPUSHBUTTON   "确定", IDOK, 140, 204, 50, 14
+    PUSHBUTTON      "取消", IDCANCEL, 198, 204, 50, 14
+END
+
+IDD_TRANSFORM DIALOGEX 0, 0, 300, 136
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "变换"
+FONT 9, "微软雅黑", 400, 0, 0x1
+BEGIN
+    LTEXT           "平移 X / Y / Z", IDC_TR_TLABEL, 10, 14, 86, 12
+    EDITTEXT        IDC_TR_TX, 100, 12, 60, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_TR_TY, 164, 12, 60, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_TR_TZ, 228, 12, 60, 14, ES_AUTOHSCROLL
+    LTEXT           "旋转 X / Y / Z（°）", IDC_STATIC, 10, 34, 86, 12
+    EDITTEXT        IDC_TR_RX, 100, 32, 60, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_TR_RY, 164, 32, 60, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_TR_RZ, 228, 32, 60, 14, ES_AUTOHSCROLL
+    LTEXT           "缩放 X / Y / Z", IDC_STATIC, 10, 54, 86, 12
+    EDITTEXT        IDC_TR_SX, 100, 52, 60, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_TR_SY, 164, 52, 60, 14, ES_AUTOHSCROLL
+    EDITTEXT        IDC_TR_SZ, 228, 52, 60, 14, ES_AUTOHSCROLL
+    LTEXT           "旋转按 ZYX 欧拉角显示 —— 引擎存的是四元数，但四元数不适合手输。", IDC_STATIC, 10, 76, 278, 20
+    DEFPUSHBUTTON   "确定", IDOK, 180, 112, 50, 14
+    PUSHBUTTON      "取消", IDCANCEL, 238, 112, 50, 14
+END
+
+IDD_CAMERA DIALOGEX 0, 0, 260, 160
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "相机参数"
+FONT 9, "微软雅黑", 400, 0, 0x1
+BEGIN
+    LTEXT           "视场角（透视，°）", IDC_STATIC, 10, 14, 96, 12
+    EDITTEXT        IDC_CAM_FOV, 110, 12, 80, 14, ES_AUTOHSCROLL
+    LTEXT           "视高（正交）", IDC_STATIC, 10, 34, 96, 12
+    EDITTEXT        IDC_CAM_ORTHO, 110, 32, 80, 14, ES_AUTOHSCROLL
+    LTEXT           "近裁剪面", IDC_STATIC, 10, 54, 96, 12
+    EDITTEXT        IDC_CAM_NEAR, 110, 52, 80, 14, ES_AUTOHSCROLL
+    LTEXT           "远裁剪面", IDC_STATIC, 10, 74, 96, 12
+    EDITTEXT        IDC_CAM_FAR, 110, 72, 80, 14, ES_AUTOHSCROLL
+    LTEXT           "视场角只在透视下起作用，视高只在正交下起作用 —— 两个都留着，切投影时不会丢掉另一边的设置。", IDC_STATIC, 10, 96, 240, 32
+    DEFPUSHBUTTON   "确定", IDOK, 140, 136, 50, 14
+    PUSHBUTTON      "取消", IDCANCEL, 198, 136, 50, 14
+END
+
+IDD_TESS DIALOGEX 0, 0, 260, 120
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "细分精度"
+FONT 9, "微软雅黑", 400, 0, 0x1
+BEGIN
+    LTEXT           "弦高容差", IDC_STATIC, 10, 14, 96, 12
+    EDITTEXT        IDC_TESS_CHORD, 110, 12, 80, 14, ES_AUTOHSCROLL
+    LTEXT           "角度容差（°）", IDC_STATIC, 10, 34, 96, 12
+    EDITTEXT        IDC_TESS_ANGULAR, 110, 32, 80, 14, ES_AUTOHSCROLL
+    LTEXT           "填 0 表示「用引擎默认值」。改动会让所有网格缓存失效并重新细分 —— 参数是真相，网格只是缓存。", IDC_STATIC, 10, 56, 240, 32
+    DEFPUSHBUTTON   "确定", IDOK, 140, 96, 50, 14
+    PUSHBUTTON      "取消", IDCANCEL, 198, 96, 50, 14
+END
+
+/////////////////////////////////////////////////////////////////////////////
+// 字符串
+//
+// IDR_MAINFRAME 那条是 CFrameWnd::LoadFrame 拿去做窗口标题的。状态栏的窗格
+// id 也要有字符串：CStatusBar::SetIndicators 用它量窗格的初始宽度。
+
+STRINGTABLE
+BEGIN
+    IDR_MAINFRAME           "CadGeom — MFC 宿主示例"
+    ID_INDICATOR_PROMPT     "就绪"
+    ID_INDICATOR_SELECTION  "选中 0 / 0"
+    ID_INDICATOR_MEASURE    "测量 —"
+    ID_INDICATOR_DEVICE     "设备"
+END

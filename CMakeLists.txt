@@ -289,6 +289,8 @@ if(CADGEOM_BUILD_EXAMPLES)
     add_subdirectory(examples/glfw_viewer)
     # 嵌入宿主 UI 的那一半（SurfaceKind::NativeWin32）。找不到 Qt 就自己跳过。
     add_subdirectory(examples/qt_viewer)
+    # 同一件事换 MFC 说一遍。没装 VS 的 MFC 组件就自己跳过。
+    add_subdirectory(examples/mfc_viewer)
 endif()
 
 if(CADGEOM_BUILD_TESTS)

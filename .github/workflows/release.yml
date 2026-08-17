@@ -151,7 +151,7 @@ jobs:
               '',
               "| 文件 | 内容 |",
               "| --- | --- |",
-              "| ``CadGeom-$v-windows-x64.zip`` | 二进制包。``cadgeom.dll``、导入库、公共头文件、``find_package(CadGeom)`` 用的 cmake 配置、``glfw_viewer`` 和 ``qt_viewer`` 两个示例，以及它们的运行时依赖（MSVC 运行时、Qt）。解开就能跑。 |",
+              "| ``CadGeom-$v-windows-x64.zip`` | 二进制包。``cadgeom.dll``、导入库、公共头文件、``find_package(CadGeom)`` 用的 cmake 配置、``glfw_viewer``、``qt_viewer`` 和 ``mfc_viewer`` 三个示例，以及它们的运行时依赖（MSVC 运行时、Qt）。解开就能跑。 |",
               "| ``CadGeom-$v-src-with-submodules.zip`` | 源码包，含 ``external/`` 下全部子模块。GitHub 自动生成的 Source code 不含子模块，那份是构建不了的。 |",
               '',
               '### 用起来',
