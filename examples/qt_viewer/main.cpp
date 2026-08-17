@@ -58,9 +58,11 @@ int main(int argc, char** argv) {
         MainWindow window(*engine);
 
         // 自检开关：--screenshot PATH [--frames N]，画满就存图退出。没有它，
-        // 「嵌入宿主窗口的那条渲染路径还通不通」就只能靠人盯着看。
+        // 「嵌入宿主窗口的那条渲染路径还通不通」就只能靠人盯着看。--sample 画那张
+        // 示例图纸 —— 自检要它，不然截出来的是一张只有网格的空图。
         QString shotPath;
         int frames = 0;
+        bool sample = false;
         const QStringList args = app.arguments();
         for (int i = 1; i < args.size(); ++i) {
             if (args[i] == QStringLiteral("--screenshot") && i + 1 < args.size()) {
@@ -70,10 +72,17 @@ int main(int argc, char** argv) {
                 }
             } else if (args[i] == QStringLiteral("--frames") && i + 1 < args.size()) {
                 frames = args[++i].toInt();
+            } else if (args[i] == QStringLiteral("--sample")) {
+                sample = true;
             }
         }
         if (frames > 0) {
             window.setAutoShot(shotPath, frames);
+        }
+        if (sample) {
+            // 视口还要等第一次 showEvent 才建得起来，这会儿场景里有东西，它就绪时
+            // 那一次 ZoomToFit 正好框住。
+            window.loadSampleScene();
         }
 
         window.show();

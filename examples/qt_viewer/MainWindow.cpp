@@ -210,7 +210,8 @@ MainWindow::MainWindow(ICadEngine& engine, QWidget* parent)
     connect(&LogBridge::instance(), &LogBridge::message, this, &MainWindow::appendLog);
 
     addViewport(/*secondary=*/false);
-    BuildSampleScene(*engine_.GetScene());
+    // 起来就是一张空图纸。示例图纸从「文件 → 载入示例图纸」或命令行的 --sample 进来
+    // —— 宿主替用户往场景里塞几何，是替他做了一个不该由程序做的决定。
 
     frameTimer_ = new QTimer(this);
     connect(frameTimer_, &QTimer::timeout, this, &MainWindow::onFrame);
@@ -460,7 +461,7 @@ void MainWindow::createMenus() {
 
     QAction* act = add(file, QStringLiteral("新建"), [this]() { onNewScene(); });
     act->setShortcut(QKeySequence::New);
-    act = add(file, QStringLiteral("载入示例图纸"), [this]() { onSampleScene(); });
+    act = add(file, QStringLiteral("载入示例图纸"), [this]() { loadSampleScene(); });
     act->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+N")));
     file->addSeparator();
 
@@ -703,8 +704,10 @@ void MainWindow::onNewScene() {
     appendLog(static_cast<int>(LogLevel::Info), QStringLiteral("场景已清空"));
 }
 
-void MainWindow::onSampleScene() {
+void MainWindow::loadSampleScene() {
     BuildSampleScene(*engine_.GetScene());
+    // 视口还没建起来时 activeCamera() 是空的，onFit 自己认这一路 —— 那种情况下
+    // 由 viewportReady 里的 ZoomToFit 收尾。
     onFit(false);
 }
 

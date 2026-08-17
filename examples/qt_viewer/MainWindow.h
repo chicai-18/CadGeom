@@ -52,6 +52,11 @@ public:
     ///       改动能不能在**嵌入宿主窗口**的那条路径上跑通，总得有个不靠手的验法。
     void setAutoShot(const QString& path, int frames);
 
+    /// @brief 把内置的示例图纸画进场景，然后框住它。
+    /// @note 窗口**不会**自己调这个 —— 起来就是一张空图纸，画什么由用户决定。菜单
+    ///       里的「载入示例图纸」和命令行的 `--sample` 是它仅有的两个入口。
+    void loadSampleScene();
+
 private:
     // -- 搭界面 -------------------------------------------------------------
     void createActions();
@@ -64,7 +69,6 @@ private:
 
     // -- 文件 ---------------------------------------------------------------
     void onNewScene();
-    void onSampleScene();
     /// @param merge true 并入当前场景，false 先清空（那样的导入不可撤销，头文件说过）。
     void onImport(bool merge);
     void onExport(bool selectionOnly);

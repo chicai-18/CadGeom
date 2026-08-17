@@ -330,7 +330,10 @@ cmake -S . -B build -G "Visual Studio 17 2022" -A x64 \
 build/bin/Debug/qt_viewer.exe
 # Same habit as the headless demo run: prove the embedded render path still
 # works without a hand on the mouse. Exit code 2 means an object leaked.
-build/bin/Debug/qt_viewer.exe --screenshot shot.png --frames 60
+# It opens on an empty scene, so the self-check asks for the sample drawing;
+# without --sample the screenshot is a bare grid. The menu entry is the other
+# way in ("文件 → 载入示例图纸", Ctrl+Shift+N).
+build/bin/Debug/qt_viewer.exe --sample --screenshot shot.png --frames 60
 ```
 
 Three things that bite when embedding, all written up in that README: the widget

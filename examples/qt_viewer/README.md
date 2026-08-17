@@ -25,12 +25,16 @@ Qt5 和 Qt6 都行（`find_package(QT NAMES Qt6 Qt5 ...)`）。找不到 Qt 的�
 Windows 上构建完会跑一次 `windeployqt`，Qt 的运行时直接落在可执行文件旁边，双击就能
 跑；不想要就 `-DCADGEOM_QT_DEPLOY=OFF`。
 
-自检用的两个开关，和 `glfw_viewer` 的 `--headless --screenshot` 是同一个用意 ——
-「嵌在宿主窗口里的那条渲染路径还通不通」总得有个不靠手的验法：
+起来是一张**空图纸** —— 宿主替用户往场景里塞几何，是替他做了一个不该由程序做的决定。
+要那张安装板就走「文件 → 载入示例图纸」（`Ctrl+Shift+N`），命令行上是 `--sample`。
+
+自检用的几个开关，和 `glfw_viewer` 的 `--headless --screenshot` 是同一个用意 ——
+「嵌在宿主窗口里的那条渲染路径还通不通」总得有个不靠手的验法。截图要 `--sample`，
+不然截出来的是一张只有网格的空图：
 
 ```sh
-build/bin/Debug/qt_viewer.exe --screenshot shot.png --frames 60
-build/bin/Debug/qt_viewer.exe --frames 300
+build/bin/Debug/qt_viewer.exe --sample --screenshot shot.png --frames 60
+build/bin/Debug/qt_viewer.exe --sample --frames 300
 ```
 
 退出时会检查 `CadGeom_GetLiveObjectCount()`。没回到 0 就是有人漏了一次 `Release()`，
