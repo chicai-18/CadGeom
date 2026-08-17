@@ -42,7 +42,7 @@ public:
     void OnCancel(IToolContext* ctx) override;
 
 protected:
-    explicit ToolBase(const ToolSettings& settings);
+    explicit ToolBase(ToolSettings& settings);
     ~ToolBase() override;
 
     /// Colours are linear (the renderer composes in linear light), so these look
@@ -88,7 +88,15 @@ protected:
     /// Pushes the tool's current prompt to the status bar.
     void ShowPrompt(IToolContext* ctx) const;
 
-    const ToolSettings& Settings() const { return settings_; }
+    /// @brief 引擎全局的那半边工具状态。
+    /// @note 可写 —— 垂足吸附的参考点住在这里，而设它的正是「落下了一个点」的
+    ///       那个工具。设置对象归工具管理器所有，活得比每一个工具都久。
+    ToolSettings& Settings() const { return settings_; }
+
+    /// @brief 记下「上一个点」，垂足吸附从此有的可算。
+    void SetSnapReference(const Vec3d& point) const;
+    /// @brief 手势结束或被取消：没有上一个点了，垂足吸附也就该停了。
+    void ClearSnapReference() const;
 
     /// Where the cursor last was on the work plane, kept by OnMouseMove so a
     /// preview can be rebuilt on a frame with no input.
@@ -97,7 +105,7 @@ protected:
 
 private:
     core::ObjectTracker tracker_;
-    const ToolSettings& settings_;
+    ToolSettings& settings_;
 };
 
 } // namespace cadgeom::interact

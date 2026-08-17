@@ -35,7 +35,7 @@ IGeometryBuilder* BuilderOf(IToolContext* ctx) {
 
 class SelectTool final : public ToolBase {
 public:
-    explicit SelectTool(const ToolSettings& settings) : ToolBase(settings) {}
+    explicit SelectTool(ToolSettings& settings) : ToolBase(settings) {}
 
     ToolId GetId() const override { return ToolId::Select; }
     const char* GetName() const override { return "Select"; }
@@ -94,7 +94,7 @@ private:
 
 class PointTool final : public ToolBase {
 public:
-    explicit PointTool(const ToolSettings& settings) : ToolBase(settings) {}
+    explicit PointTool(ToolSettings& settings) : ToolBase(settings) {}
 
     ToolId GetId() const override { return ToolId::Point; }
     const char* GetName() const override { return "Point"; }
@@ -149,6 +149,9 @@ public:
             dragCandidate_ = true;
             pressX_ = e.x;
             pressY_ = e.y;
+            // 第一个点落下之后，「垂直于某条线」这句话才有主语。第二个点因此可以
+            // 吸到垂足上（docs/architecture.md §6.3）。
+            SetSnapReference(anchor_);
             ShowPrompt(ctx);
             return ToolResult::Handled;
         }
@@ -180,7 +183,7 @@ public:
     }
 
 protected:
-    explicit TwoPointTool(const ToolSettings& settings) : ToolBase(settings) {}
+    explicit TwoPointTool(ToolSettings& settings) : ToolBase(settings) {}
     ~TwoPointTool() override = default;
 
     /// Builds the shape. Returning kInvalidEntity means "too small to be real
@@ -196,6 +199,7 @@ protected:
     void Reset() override {
         anchored_ = false;
         dragCandidate_ = false;
+        ClearSnapReference();
     }
 
     bool anchored_{false};
@@ -210,6 +214,7 @@ private:
         if (Continues()) {
             anchor_ = p;
             dragCandidate_ = false;
+            SetSnapReference(anchor_);
         } else {
             Reset();
         }
@@ -224,7 +229,7 @@ private:
 
 class LineTool final : public TwoPointTool {
 public:
-    explicit LineTool(const ToolSettings& settings) : TwoPointTool(settings) {}
+    explicit LineTool(ToolSettings& settings) : TwoPointTool(settings) {}
 
     ToolId GetId() const override { return ToolId::Line; }
     const char* GetName() const override { return "Line"; }
@@ -260,7 +265,7 @@ private:
 
 class CircleTool final : public TwoPointTool {
 public:
-    explicit CircleTool(const ToolSettings& settings) : TwoPointTool(settings) {}
+    explicit CircleTool(ToolSettings& settings) : TwoPointTool(settings) {}
 
     ToolId GetId() const override { return ToolId::Circle; }
     const char* GetName() const override { return "Circle"; }
@@ -305,7 +310,7 @@ private:
 
 class RectangleTool final : public TwoPointTool {
 public:
-    explicit RectangleTool(const ToolSettings& settings) : TwoPointTool(settings) {}
+    explicit RectangleTool(ToolSettings& settings) : TwoPointTool(settings) {}
 
     ToolId GetId() const override { return ToolId::Rectangle; }
     const char* GetName() const override { return "Rectangle"; }
@@ -366,7 +371,7 @@ private:
 
 class PolylineTool final : public ToolBase {
 public:
-    explicit PolylineTool(const ToolSettings& settings) : ToolBase(settings) {}
+    explicit PolylineTool(ToolSettings& settings) : ToolBase(settings) {}
 
     ToolId GetId() const override { return ToolId::Polyline; }
     const char* GetName() const override { return "Polyline"; }
@@ -399,6 +404,7 @@ public:
         }
 
         points_.push_back(p);
+        SetSnapReference(points_.back());
         ShowPrompt(ctx);
         return ToolResult::Handled;
     }
@@ -439,7 +445,10 @@ public:
 protected:
     bool InProgress() const override { return !points_.empty(); }
 
-    void Reset() override { points_.clear(); }
+    void Reset() override {
+        points_.clear();
+        ClearSnapReference();
+    }
 
     const char* Prompt() const override {
         return points_.empty() ? "Specify start point"
@@ -465,7 +474,7 @@ private:
 
 } // namespace
 
-void RegisterBuiltinTools(IToolManager& manager, const ToolSettings& settings) {
+void RegisterBuiltinTools(IToolManager& manager, ToolSettings& settings) {
     manager.RegisterTool(new SelectTool(settings));
     manager.RegisterTool(new PointTool(settings));
     manager.RegisterTool(new LineTool(settings));

@@ -67,7 +67,8 @@ public:
 
     // -- interact::ISnapSource ----------------------------------------------
 
-    void CollectSnapCandidates(const Vec3d& center, double radius, uint32_t mask,
+    void CollectSnapCandidates(const Vec3d& center, double radius,
+                               const interact::SnapQuery& query,
                                std::vector<interact::SnapCandidate>& out) const override;
 
     // -- Engine-side access -------------------------------------------------

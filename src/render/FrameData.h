@@ -90,6 +90,11 @@ struct RenderView {
     bool drawSurfaces{true};
     /// 画不画实体的特征边。RenderMode::Shaded 关掉它。
     bool drawEdges{true};
+    /// 表面只写深度、不上色。RenderMode::HiddenLine 用：面看不见但挡得住，被挡住
+    /// 的边因此有据可依。
+    bool depthOnlySurfaces{false};
+    /// 再画一遍被遮挡的边和曲线，虚线。同上，隐藏线模式的第二遍。
+    bool drawOccluded{false};
 };
 
 void FillFrameUniforms(const RenderView& view, uint32_t viewportWidth, uint32_t viewportHeight,

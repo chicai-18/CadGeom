@@ -56,7 +56,11 @@ public:
                              float pixelWidth, LineStyle style) = 0;
     virtual void AddCircle(const Plane& plane, double radius, const Color& color,
                            float pixelWidth, LineStyle style) = 0;
-    /// Screen-anchored text, in viewport pixels. UTF-8.
+    /// @brief 锚在一个世界点上的文字，字号是固定的屏幕像素，永远正对观察者。
+    /// @param utf8Text UTF-8，但引擎画的是一套**笔画字体**（图纸上的字历来如此），
+    ///        只覆盖 ASCII：小写按大写画，非 ASCII 的字符不画。要显示别的文字，
+    ///        用宿主自己的 UI 层，配合 ICadEngine2::GetStatusText()。
+    /// @note 文字会从锚点往右上方让开半个字高，免得压住它标注的那个点。
     virtual void AddText(const Vec3d& worldAnchor, const char* utf8Text, const Color& color) = 0;
 
 protected:

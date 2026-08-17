@@ -18,6 +18,11 @@ constexpr double kPlaneOffset = 0.34;
 constexpr double kPlaneSize = 0.24;
 /// 旋转环的命中测试采样段数。
 constexpr uint32_t kRingSegments = 64;
+/// 等比缩放手柄的抓取半径，像素。比轴宽一点：它就一个点，得好抓。
+constexpr double kUniformGrabPixels = 14.0;
+/// 缩放倍率的下限。再往下就是把零件压成一张纸，或者翻个面变成镜像 —— 那不是
+/// 缩放工具该干的事。
+constexpr double kMinScaleFactor = 1.0e-3;
 /// 平面手柄和旋转环与视线夹角太小就不可用：拖拽平面几乎平行于视线时，鼠标移动
 /// 一个像素能让解出来的点跑到无穷远。
 constexpr double kMinFacing = 0.18;
@@ -142,6 +147,34 @@ GizmoHandle Gizmo::HitTest(const ICamera& camera, double x, double y) const {
         return best;
     }
 
+    if (mode_ == GizmoMode::Scale) {
+        Vec2d originPixel{};
+        if (!camera.WorldToScreen(origin_, originPixel)) {
+            return GizmoHandle::None;
+        }
+        // 等比手柄在原点上，压着三根轴的根部，所以它先测 —— 反过来的话它永远抓不到。
+        const double dx = originPixel.x - x;
+        const double dy = originPixel.y - y;
+        if (std::sqrt(dx * dx + dy * dy) <= kUniformGrabPixels) {
+            return GizmoHandle::Uniform;
+        }
+
+        GizmoHandle best = GizmoHandle::None;
+        double bestPixels = kGrabPixels;
+        for (int axis = 0; axis < 3; ++axis) {
+            Vec2d tip{};
+            if (!camera.WorldToScreen(origin_ + kWorldAxes[axis] * size, tip)) {
+                continue;
+            }
+            const double d = PointSegmentPixels(originPixel, tip, x, y);
+            if (d < bestPixels) {
+                bestPixels = d;
+                best = static_cast<GizmoHandle>(static_cast<int>(GizmoHandle::AxisX) + axis);
+            }
+        }
+        return best;
+    }
+
     // 平面方块先测：它们贴在原点边上，和三根轴的根部重叠。
     for (int axis = 0; axis < 3; ++axis) {
         const auto handle = static_cast<GizmoHandle>(static_cast<int>(GizmoHandle::PlaneYZ) + axis);
@@ -196,7 +229,31 @@ bool Gizmo::BeginDrag(const ICamera& camera, GizmoHandle handle, double x, doubl
     camera.ScreenToRay(x, y, ray);
     const Vec3d axis = AxisOf(handle);
 
-    if (mode_ == GizmoMode::Rotate) {
+    if (handle == GizmoHandle::Uniform) {
+        Vec2d originPixel{};
+        if (!camera.WorldToScreen(origin_, originPixel)) {
+            return false;
+        }
+        const double dx = x - originPixel.x;
+        const double dy = y - originPixel.y;
+        startPixelDistance_ = std::sqrt(dx * dx + dy * dy);
+        // 正好压在原点上按下去的话，之后每一点移动都会是「除以零」。往外挪一点
+        // 再拖 —— 这也正是用户直觉里「从哪儿开始拉」的意思。
+        if (startPixelDistance_ < 1.0) {
+            return false;
+        }
+    } else if (mode_ == GizmoMode::Scale) {
+        double onAxis = 0.0;
+        double onRay = 0.0;
+        if (!geom::ClosestLineLine(origin_, axis, ray.origin, ray.dir, onAxis, onRay)) {
+            return false;
+        }
+        // 倍率是「现在的参数 / 按下时的参数」，按下时的参数太靠近原点就解不稳。
+        if (std::fabs(onAxis) < WorldSize(camera) * 0.05) {
+            return false;
+        }
+        startParam_ = onAxis;
+    } else if (mode_ == GizmoMode::Rotate) {
         Vec3d hit{};
         if (!RayPlaneIntersect(ray, origin_, axis, hit)) {
             return false;
@@ -229,9 +286,10 @@ bool Gizmo::BeginDrag(const ICamera& camera, GizmoHandle handle, double x, doubl
 }
 
 bool Gizmo::UpdateDrag(const ICamera& camera, double x, double y, Vec3d& translation,
-                       Quatd& rotation) {
+                       Quatd& rotation, Vec3d& scale) {
     translation = Vec3d{0.0, 0.0, 0.0};
     rotation = QuatIdentity();
+    scale = Vec3d{1.0, 1.0, 1.0};
     if (!dragging_) {
         return false;
     }
@@ -239,6 +297,39 @@ bool Gizmo::UpdateDrag(const ICamera& camera, double x, double y, Vec3d& transla
     Ray ray{};
     camera.ScreenToRay(x, y, ray);
     const Vec3d axis = AxisOf(handle_);
+
+    if (handle_ == GizmoHandle::Uniform) {
+        Vec2d originPixel{};
+        if (!camera.WorldToScreen(origin_, originPixel)) {
+            return false;
+        }
+        const double dx = x - originPixel.x;
+        const double dy = y - originPixel.y;
+        const double factor =
+            std::max(std::sqrt(dx * dx + dy * dy) / startPixelDistance_, kMinScaleFactor);
+        scale = Vec3d{factor, factor, factor};
+        return true;
+    }
+
+    if (mode_ == GizmoMode::Scale) {
+        double onAxis = 0.0;
+        double onRay = 0.0;
+        if (!geom::ClosestLineLine(origin_, axis, ray.origin, ray.dir, onAxis, onRay)) {
+            return false;
+        }
+        // 拖过原点会让比值变负 —— 那是镜像，不是缩放，所以夹在下限上。
+        const double factor = std::max(onAxis / startParam_, kMinScaleFactor);
+        const int index = AxisIndex(handle_);
+        scale = Vec3d{1.0, 1.0, 1.0};
+        if (index == 0) {
+            scale.x = factor;
+        } else if (index == 1) {
+            scale.y = factor;
+        } else if (index == 2) {
+            scale.z = factor;
+        }
+        return true;
+    }
 
     if (mode_ == GizmoMode::Rotate) {
         Vec3d hit{};
@@ -308,6 +399,24 @@ void Gizmo::BuildOverlay(IOverlayBuilder& overlay, const ICamera& camera,
                               widthFor(handle), usable ? LineStyle::Solid : LineStyle::Dotted);
         }
         overlay.AddPoint(origin_, kOriginColor, 7.0f);
+        return;
+    }
+
+    if (mode_ == GizmoMode::Scale) {
+        // 缩放的轴看着像标尺：一根线，末端一个方块。没有平面手柄 —— 沿一个平面
+        // 「缩放」是两个轴各缩各的，一个手柄说不清那件事。
+        for (int axis = 0; axis < 3; ++axis) {
+            const auto handle =
+                static_cast<GizmoHandle>(static_cast<int>(GizmoHandle::AxisX) + axis);
+            const Vec3d tip = origin_ + kWorldAxes[axis] * size;
+            overlay.AddLine(origin_, tip, colorFor(handle, axis), widthFor(handle),
+                            LineStyle::Solid);
+            overlay.AddPoint(tip, colorFor(handle, axis), handle == highlight ? 12.0f : 9.0f);
+        }
+        // 原点上的那个大点就是等比手柄本身，抓的范围也正是它看起来的那么大。
+        overlay.AddPoint(origin_,
+                         highlight == GizmoHandle::Uniform ? kHighlightColor : kOriginColor,
+                         highlight == GizmoHandle::Uniform ? 14.0f : 11.0f);
         return;
     }
 

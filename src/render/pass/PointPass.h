@@ -14,7 +14,7 @@ namespace cadgeom::render {
 
 class PointPass {
 public:
-    CgResult Initialize(vk::Context& ctx, VkPipelineLayout layout);
+    CgResult Initialize(vk::Context& ctx, VkPipelineLayout layout, VkSampleCountFlagBits samples);
     void Shutdown(vk::Context& ctx);
 
     /// Every point item in `snapshot`, depth tested.

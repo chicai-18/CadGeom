@@ -20,7 +20,7 @@
 #define CADGEOM_VERSION_PATCH(v) (((uint32_t)(v)) & 0xFFFu)
 
 #define CADGEOM_API_VERSION_MAJOR 0
-#define CADGEOM_API_VERSION_MINOR 1
+#define CADGEOM_API_VERSION_MINOR 2
 #define CADGEOM_API_VERSION_PATCH 0
 
 // Bump MINOR when appending to an interface, MAJOR when breaking one.

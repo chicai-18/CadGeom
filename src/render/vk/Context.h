@@ -50,6 +50,13 @@ public:
     /// UTF-8, never null — a placeholder before Initialize().
     const char* DeviceName() const { return deviceName_.c_str(); }
 
+    /// @brief 这块 GPU 的离屏目标支持哪些采样数（颜色与深度的交集）。
+    VkSampleCountFlags SupportedSampleCounts() const { return sampleCounts_; }
+
+    /// @brief 把宿主要的采样数收到设备真支持的那一档上，向下取。
+    /// @return 至少是 VK_SAMPLE_COUNT_1_BIT —— 「不开 MSAA」永远支持。
+    VkSampleCountFlagBits ClampSampleCount(uint32_t requested) const;
+
     /// Records and runs a one-shot command buffer, waiting for it to finish.
     /// Uploads and screenshot readbacks use it; nothing on the frame path does.
     CgResult ImmediateSubmit(const std::function<void(VkCommandBuffer)>& record);
@@ -77,6 +84,7 @@ private:
     VkFence immediateFence_{VK_NULL_HANDLE};
 
     std::string deviceName_{"<no device>"};
+    VkSampleCountFlags sampleCounts_{VK_SAMPLE_COUNT_1_BIT};
     bool validationEnabled_{false};
 };
 

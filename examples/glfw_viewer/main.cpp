@@ -1,4 +1,4 @@
-// CadGeom demo host — milestones M0 through M5.
+// CadGeom demo host — milestones M0 through M6.
 //
 // Two phases, deliberately separate:
 //
@@ -9,12 +9,13 @@
 //      that allocates behind the engine's back.
 //   2. A viewport: a window, a grid, an orbit camera, a drawing made of points,
 //      lines, circles and rectangles, the tools that create them, the
-//      select/move/rotate gestures that edit them, and the extrusions that turn
-//      two of those profiles into solids. Run with --headless it
-//      renders off-screen and writes a PNG instead, which is how the renderer
-//      gets verified on a machine with no display — and it drives the tools
-//      through synthetic mouse events, so interactive creation and the gizmo
-//      are checked there too rather than only by hand.
+//      select/move/rotate/scale gestures that edit them, the extrusions that turn
+//      two of those profiles into solids, and the measurement that reads a
+//      distance back off them. Run with --headless it renders off-screen and
+//      writes a PNG instead, which is how the renderer gets verified on a machine
+//      with no display — and it drives the tools through synthetic mouse events,
+//      so interactive creation, snapping and the gizmos are checked there too
+//      rather than only by hand.
 //
 // Note what this file does *not* link: GLFW. The window belongs to the engine
 // (SurfaceKind::Glfw), and the host only forwards a frame loop.
@@ -27,6 +28,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #if defined(_MSC_VER) && defined(_DEBUG)
 #include <crtdbg.h>
@@ -103,12 +105,6 @@ bool Check(bool condition, const char* what) {
     return condition;
 }
 
-/// Reports an expected-not-yet-implemented result without counting it a failure.
-void Pending(const char* what, cadgeom::ICadEngine& engine) {
-    std::printf("  [ -- ] %s: %s\n", what, engine.GetLastErrorMessage());
-    engine.ClearLastError();
-}
-
 struct Options {
     bool headless{false};
     bool apiOnly{false};
@@ -122,6 +118,14 @@ struct Options {
     std::string exportPath;
     uint32_t width{1280};
     uint32_t height{720};
+    /// --samples N：MSAA。设备支持不到那么多会被降下来，降了会说一声（M6）。
+    uint32_t samples{4};
+    /// --viewports N：开几个视口。第二个用正视图 + 隐藏线，一眼看出两件事
+    /// —— 视口之间只共享设备和几何，显示状态各自独立（M6）。
+    uint32_t viewports{1};
+    /// --hidden-line：主视口用隐藏线模式。没有显示器时检查这一条渲染改动，靠的
+    /// 就是它加 --screenshot（M6）。
+    bool hiddenLine{false};
 };
 
 Options ParseOptions(int argc, char** argv) {
@@ -162,9 +166,23 @@ Options ParseOptions(int argc, char** argv) {
                 options.width = static_cast<uint32_t>(std::atoi(w));
                 options.height = static_cast<uint32_t>(std::atoi(h));
             }
+        } else if (std::strcmp(arg, "--hidden-line") == 0) {
+            options.hiddenLine = true;
+        } else if (std::strcmp(arg, "--samples") == 0) {
+            if (const char* count = next()) {
+                options.samples = static_cast<uint32_t>(std::atoi(count));
+            }
+        } else if (std::strcmp(arg, "--viewports") == 0) {
+            if (const char* count = next()) {
+                options.viewports = static_cast<uint32_t>(std::atoi(count));
+                if (options.viewports < 1) {
+                    options.viewports = 1;
+                }
+            }
         } else {
             std::printf("usage: glfw_viewer [--headless] [--api-only] [--perspective]\n"
                         "                   [--screenshot PATH] [--frames N] [--size W H]\n"
+                        "                   [--samples N] [--viewports N] [--hidden-line]\n"
                         "                   [--import MODEL] [--export MODEL]  (.gltf/.glb/.obj)\n");
         }
     }
@@ -428,10 +446,59 @@ bool RunApiWalk(cadgeom::ICadEngine& engine) {
                     std::abs(bounds.max.x - 33.0) < 0.1,
                 "and it is still editable after the round trip");
 
-    Section("Not built yet");
-    if (CgFailed(engine.GetToolManager()->Activate(ToolId::Measure))) {
-        Pending("Activate(Measure)", engine);
+    Section("Units and the extension slot");
+    // M6 的新能力从 GetExtension 进来，而不是往冻结的接口上加虚函数（§2.2 第 3 条）。
+    // 宿主拿到 null 就是「这个版本的库没有这件东西」，据此降级而不是崩。
+    auto* ext = static_cast<ICadEngine2*>(engine.GetExtension(ExtensionId_Engine2));
+    ok &= Check(ext != nullptr, "the engine hands out its M6 extension");
+    ok &= Check(engine.GetExtension(0xBADC0DEu) == nullptr,
+                "and answers null for an id it does not know");
+
+    if (ext) {
+        char reading[64];
+        UnitSettings units{};
+        ext->GetUnitSettings(units);
+        ok &= Check(units.modelUnit == LengthUnit::Millimetre, "the model is millimetres by default");
+
+        ext->FormatLength(25.4, reading, sizeof(reading));
+        ok &= Check(std::string(reading) == "25.40 mm", "a length formats in the display unit");
+
+        // 换显示单位只换读数。下面那个圆的半径一个数都不会动 —— 单位是显示层的事，
+        // 几何是 SSOT（§3.1）。
+        units.displayUnit = LengthUnit::Inch;
+        units.linearPrecision = 3;
+        ext->SetUnitSettings(units);
+        ext->FormatLength(25.4, reading, sizeof(reading));
+        ok &= Check(std::string(reading) == "1.000 in", "and follows the display unit when it changes");
+        ok &= Check(std::abs(ext->ToModelLength(1.0) - 25.4) < 1e-12,
+                    "the host's input box converts back the same way");
+
+        ShapeParams stillMetric{};
+        ok &= Check(builder->GetParams(reloaded, stillMetric) &&
+                        stillMetric.circle.radius == 33.0,
+                    "changing units moved no geometry at all");
+
+        units.displayUnit = LengthUnit::Millimetre;
+        units.linearPrecision = 2;
+        ext->SetUnitSettings(units);
+
+        // 垂足吸附缺的那个「上一个点」现在是引擎的一份状态，所以冻结的
+        // IToolContext::SnapAt 一个字都不用改就能报出垂足（§6.3）。
+        Vec3d reference{};
+        ok &= Check(!ext->GetSnapReference(reference), "no perpendicular reference to start with");
+        ext->SetSnapReference(Vec3d{10.0, 20.0, 0.0});
+        ok &= Check(ext->GetSnapReference(reference) && reference.y == 20.0,
+                    "and one can be set for Snap_Perpendicular to work from");
+        ext->ClearSnapReference();
+
+        ok &= Check((engine.GetToolManager()->GetSnapMask() & Snap_Perpendicular) != 0,
+                    "Snap_Perpendicular is live in the default mask");
     }
+
+    ok &= Check(CgSucceeded(engine.GetToolManager()->Activate(ToolId::Scale)) &&
+                    CgSucceeded(engine.GetToolManager()->Activate(ToolId::Measure)),
+                "the last two built-in tools are registered");
+    engine.GetToolManager()->Activate(ToolId::Select);
 
     return ok;
 }
@@ -442,11 +509,13 @@ bool RunApiWalk(cadgeom::ICadEngine& engine) {
 
 void PrintCameraHelp() {
     std::printf("  middle drag  orbit          shift+middle / right drag  pan\n"
-                "  wheel        zoom at cursor  double middle-click        zoom to fit\n"
-                "  1..7         standard views  F fit   P ortho/persp   G grid   W wireframe\n"
+                "  wheel        zoom at cursor  double middle-click        fit\n"
+                "  1..7  standard views   F fit (selection if any)   P ortho/persp\n"
+                "  G grid   H heads-up display   W cycle shaded/edges/wireframe/hidden-line\n"
                 "  V select  X point  L line  C circle  R rectangle  Y polyline  Esc cancel\n"
                 "  E extrude — click a closed profile, then drag along its normal\n"
-                "  M move    T rotate  — click an object, then drag an axis, plane or ring\n"
+                "  M move    T rotate    S scale  — drag an axis, plane, ring or the centre\n"
+                "  D measure — click two points; the readout is in the status line\n"
                 "  ctrl+click / shift+click  add to the selection    Del  delete it\n"
                 "  Ctrl+Z undo   Ctrl+Y (or Ctrl+Shift+Z) redo\n");
 }
@@ -775,8 +844,123 @@ bool DriveTools(cadgeom::ICadEngine& engine, cadgeom::IViewport& viewport) {
         stack.Redo();
     }
 
+    // -- M6：垂足吸附 --------------------------------------------------------
+    //
+    // 从空白处的一个点向竖直中心线（x = 0，y 从 -50 到 50）画一条线，第二个点瞄在
+    // 垂足附近但不精确。垂足吸附该把它拉到 (0, 30) —— 从第一个点作垂线的那个落点，
+    // 而不是光标底下那个差了一点的位置。M3 里这件事做不到，因为签名里没有地方传
+    // 「第一个点」（§6.3）。
+    {
+        tools.Activate(ToolId::Line);
+        const Vec3d start{-40.0, 30.0, 0.0};
+        send(start, MouseAction::Move);
+        send(start, MouseAction::Down);
+        send(start, MouseAction::Up);
+
+        // 差了几个像素 —— 吸附本来就是「点得差不多」时把光标拉到位，所以目标必须
+        // 落在容差之内，垂足也不例外。
+        const Vec3d askew{0.35, 29.65, 0.0};
+        send(askew, MouseAction::Move);
+        send(askew, MouseAction::Down);
+
+        ShapeParams perpendicular{};
+        const EntityId perpLine = scene.GetEntityAt(scene.GetEntityCount() - 1);
+        const bool got = scene.GetGeometryBuilder()->GetParams(perpLine, perpendicular) &&
+                         perpendicular.type == ShapeType::Line;
+        ok &= Check(got && std::abs(perpendicular.line.end.x) < 1e-9 &&
+                        std::abs(perpendicular.line.end.y - start.y) < 1e-9,
+                    "a click near a line snapped to the foot of the perpendicular");
+        scene.GetCommandStack()->Undo();
+    }
+
+    // -- M6：测量 ------------------------------------------------------------
+    //
+    // 唯一一个什么都不改的工具。点两个已知的点，结果从扩展接口读回来。
+    {
+        auto* ext = static_cast<ICadEngine2*>(engine.GetExtension(ExtensionId_Engine2));
+        const uint32_t entitiesBefore = scene.GetEntityCount();
+        const uint32_t undoBefore = scene.GetCommandStack()->GetUndoCount();
+
+        tools.Activate(ToolId::Measure);
+        const Vec3d a{-60.0, -40.0, 0.0};
+        const Vec3d b{-60.0, 0.0, 0.0};
+        send(a, MouseAction::Move);
+        send(a, MouseAction::Down);
+        send(b, MouseAction::Move);
+        send(b, MouseAction::Down);
+
+        Vec3d from{};
+        Vec3d to{};
+        double distance = 0.0;
+        ok &= Check(ext && ext->GetMeasurement(from, to, distance) &&
+                        std::abs(distance - 40.0) < 1e-6,
+                    "measuring two points reports the distance between them");
+        ok &= Check(scene.GetEntityCount() == entitiesBefore &&
+                        scene.GetCommandStack()->GetUndoCount() == undoBefore,
+                    "and it left the scene and the undo stack untouched");
+
+        if (ext) {
+            char reading[64];
+            ext->FormatLength(distance, reading, sizeof(reading));
+            std::printf("         %s\n", reading);
+        }
+    }
+
+    // -- M6：缩放 Gizmo ------------------------------------------------------
+    //
+    // 和 Move 的手法一样：把 Gizmo 原点投到屏幕上，沿投影后的 X 轴走几个像素抓住
+    // 手柄，再往外拖。等比手柄在原点上，轴手柄沿着轴。
+    {
+        selection.Set(CgSpan<const EntityId>{&rectangle, 1});
+        Aabb scaleBounds{};
+        if (selection.GetBounds(scaleBounds)) {
+            const Vec3d origin{(scaleBounds.min.x + scaleBounds.max.x) * 0.5,
+                               (scaleBounds.min.y + scaleBounds.max.y) * 0.5,
+                               (scaleBounds.min.z + scaleBounds.max.z) * 0.5};
+            Vec2d scaleOrigin{};
+            Vec2d scaleAlong{};
+            if (camera.WorldToScreen(origin, scaleOrigin) &&
+                camera.WorldToScreen(Vec3d{origin.x + 10.0, origin.y, origin.z}, scaleAlong)) {
+                double sx = scaleAlong.x - scaleOrigin.x;
+                double sy = scaleAlong.y - scaleOrigin.y;
+                const double axisLength = std::sqrt(sx * sx + sy * sy);
+                sx /= axisLength;
+                sy /= axisLength;
+
+                const auto atPixel = [&](double pixels, MouseAction action) {
+                    MouseEvent e{};
+                    e.button = MouseButton::Left;
+                    e.action = action;
+                    e.x = scaleOrigin.x + sx * pixels;
+                    e.y = scaleOrigin.y + sy * pixels;
+                    return viewport.OnMouseEvent(e);
+                };
+
+                Transform beforeScale{};
+                scene.GetEntity(rectangle)->GetLocalTransform(beforeScale);
+
+                ok &= Check(CgSucceeded(tools.Activate(ToolId::Scale)), "activated the scale tool");
+                ok &= Check(atPixel(40.0, MouseAction::Down), "grabbed the X scale handle");
+                atPixel(80.0, MouseAction::Move);
+                atPixel(80.0, MouseAction::Up);
+
+                Transform afterScale{};
+                scene.GetEntity(rectangle)->GetLocalTransform(afterScale);
+                ok &= Check(afterScale.scale.x > beforeScale.scale.x + 1e-6,
+                            "dragging the X handle scaled the object along X only");
+                ok &= Check(std::abs(afterScale.scale.y - beforeScale.scale.y) < 1e-9,
+                            "and left the other two axes alone");
+                ok &= Check(std::string(scene.GetCommandStack()->PeekUndoName()) == "Scale",
+                            "the drag pushed one Scale");
+                scene.GetCommandStack()->Undo();
+            }
+        }
+    }
+
     // 结束时停在「Move 工具 + 一个非空选择集」上，截图里因此带着 M3 的验收内容：
     // 高亮的对象，和落在它身上的 Gizmo。
+    selection.Set(CgSpan<const EntityId>{&picked, 1});
+    tools.Activate(ToolId::Move);
     return ok;
 }
 
@@ -788,7 +972,7 @@ bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
     desc.surface.kind = options.headless ? SurfaceKind::Headless : SurfaceKind::Glfw;
     desc.surface.width = options.width;
     desc.surface.height = options.height;
-    desc.surface.title = "CadGeom — M4";
+    desc.surface.title = "CadGeom — M6";
     desc.projection =
         options.perspective ? ProjectionMode::Perspective : ProjectionMode::Orthographic;
     // Linear light: the renderer composes in a float target and the swapchain
@@ -796,15 +980,52 @@ bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
     desc.background = Color{0.035f, 0.038f, 0.045f, 1.0f};
     desc.showGrid = true;
     desc.vsync = true;
+    desc.sampleCount = options.samples;
 
     IViewport* viewport = engine.CreateViewport(desc);
     if (!viewport) {
         std::printf("  [FAIL] CreateViewport: %s\n", engine.GetLastErrorMessage());
         return false;
     }
+    if (options.hiddenLine) {
+        viewport->SetRenderMode(RenderMode::HiddenLine);
+    }
     ok &= Check(true, options.headless ? "headless viewport created" : "window created");
     std::printf("         device: %s\n", engine.GetDeviceName());
     ok &= Check(engine.GetViewportCount() == 1, "the engine tracks its viewport");
+
+    auto* ext = static_cast<ICadEngine2*>(engine.GetExtension(ExtensionId_Engine2));
+    if (ext && options.samples > 1) {
+        // 设备支持不到那么多采样时会被降下来，所以要的和拿到的不一定是同一个数。
+        const uint32_t got = ext->GetSampleCount(viewport);
+        ok &= Check(got >= 1 && got <= options.samples, "the viewport reports its MSAA level");
+        std::printf("         %ux MSAA requested, %ux in use\n", options.samples, got);
+    }
+
+    // 第二个视口：同一个设备、同一份几何、同一个场景，但相机、渲染模式和 HUD 各自
+    // 独立。它是「多视口」这条验收标准的样子，也是一张四视图布局的起点（M6）。
+    std::vector<IViewport*> extras;
+    for (uint32_t i = 1; i < options.viewports; ++i) {
+        ViewportDesc second = desc;
+        second.surface.title = "CadGeom — M6 (front elevation / hidden line)";
+        second.projection = ProjectionMode::Orthographic;
+        IViewport* other = engine.CreateViewport(second);
+        if (!other) {
+            std::printf("  [FAIL] second CreateViewport: %s\n", engine.GetLastErrorMessage());
+            ok = false;
+            break;
+        }
+        // 正视图 + 隐藏线，也就是一张工程立面图：表面只写深度不上色，被挡住的边照画
+        // 但画成虚线。圆柱背面那半圈底环因此看得见，而且看得出它在背面。整件事和第
+        // 一个视口的着色模式同时存在 —— 视口之间共享的只有设备和几何。
+        other->GetCamera()->SetStandardView(StandardView::Front);
+        other->SetRenderMode(RenderMode::HiddenLine);
+        extras.push_back(other);
+    }
+    if (options.viewports > 1) {
+        ok &= Check(engine.GetViewportCount() == options.viewports,
+                    "the engine tracks every viewport");
+    }
 
     ICamera* camera = viewport->GetCamera();
     ok &= Check(camera != nullptr, "viewport exposes its camera");
@@ -857,6 +1078,12 @@ bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
         ok &= DriveTools(engine, *viewport);
     }
 
+    // 每个视口各自把画面框好。相机是视口自己的，所以这件事得逐个来 —— 而这正是
+    // 「多视口」意味着什么：共享几何，各看各的。
+    for (IViewport* other : extras) {
+        other->GetCamera()->ZoomToFit(nullptr, 1.25);
+    }
+
     if (!options.exportPath.empty()) {
         Section("Export");
         ExportOptions exportOptions{};
@@ -891,7 +1118,14 @@ bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
         // date. Rendering without it would show the previous frame's state.
         engine.Tick(delta);
 
+        // 一次 Tick 之后每个视口各画一帧：脏几何只解析一次、只上传一次，剩下的
+        // 就是每个视口自己那份相机与显示状态（docs/architecture.md §4.1）。
         lastRender = viewport->Render();
+        for (IViewport* other : extras) {
+            if (CgSucceeded(lastRender)) {
+                lastRender = other->Render();
+            }
+        }
         if (CgFailed(lastRender)) {
             std::printf("  [FAIL] Render: %s\n", engine.GetLastErrorMessage());
             break;
@@ -902,6 +1136,15 @@ bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
             break;
         }
         if (!options.headless && viewport->ShouldClose()) {
+            break;
+        }
+        // 关掉任何一个窗口就整个退出：demo 只有一份帧循环，一个死掉的窗口留在那儿
+        // 只会看着像卡住了。
+        bool closed = false;
+        for (const IViewport* other : extras) {
+            closed = closed || (!options.headless && other->ShouldClose());
+        }
+        if (closed) {
             break;
         }
     }
@@ -939,10 +1182,28 @@ bool RunViewport(cadgeom::ICadEngine& engine, const Options& options) {
         } else {
             std::printf("         %s\n", engine.GetLastErrorMessage());
         }
+
+        // 每个额外视口写一张自己的图，文件名加后缀。两张图放在一起就是「多视口」
+        // 这条验收标准：同一个场景、两套显示状态。
+        for (size_t i = 0; i < extras.size(); ++i) {
+            std::string path = options.screenshotPath;
+            const size_t dot = path.rfind('.');
+            const std::string suffix = "_vp" + std::to_string(i + 2);
+            path.insert(dot == std::string::npos ? path.size() : dot, suffix);
+            if (CgSucceeded(extras[i]->SaveScreenshot(path.c_str()))) {
+                std::printf("         %s\n", path.c_str());
+            } else {
+                ok = false;
+                std::printf("  [FAIL] %s: %s\n", path.c_str(), engine.GetLastErrorMessage());
+            }
+        }
     }
 
+    for (IViewport* other : extras) {
+        other->Release();
+    }
     viewport->Release();
-    ok &= Check(engine.GetViewportCount() == 0, "releasing the viewport unregistered it");
+    ok &= Check(engine.GetViewportCount() == 0, "releasing the viewports unregistered them");
     return ok;
 }
 

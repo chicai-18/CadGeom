@@ -66,6 +66,19 @@ public:
     CgResult Render() override;
     CgResult SaveScreenshot(const char* utf8Path) override;
 
+    // -- Engine-side（ICadEngine2 从这里取，IViewport 已经冻结）----------------
+
+    /// @brief 当前工具写给状态栏的提示，UTF-8，永不为 null。
+    const char* StatusText() const { return toolContext_.StatusText(); }
+
+    /// @brief 引擎自绘的 HUD 开关。默认开着 —— 一个看不见自己在哪个工具里、
+    ///        网格一格是多少的视口，谈不上「能拿来干活」。
+    void SetHudVisible(bool visible) { showHud_ = visible; }
+    bool IsHudVisible() const { return showHud_; }
+
+    /// @brief 实际拿到的 MSAA 采样数，可能低于宿主要的那个。
+    uint32_t SampleCount() const { return renderer_.SampleCount(); }
+
 private:
     void OnSurfaceResized(uint32_t width, uint32_t height);
     bool HandleCameraMouse(const MouseEvent& e, double dx, double dy);
@@ -90,6 +103,16 @@ private:
     /// snapping rounds to.
     double GridSpacing() const;
 
+    /// @brief 把状态行和那一行读数画进叠加层（M6 的 HUD）。
+    ///
+    /// 用的是笔画字体走 LinePass，不是 UI 库：核心库不带 UI 依赖
+    /// （docs/architecture.md §0.1）。宿主要做真正的面板，从
+    /// ICadEngine2::GetStatusText 拿同一份文本自己画。
+    void BuildHud();
+
+    /// @brief 「按 F 缩放到合适」：有选中就框选择集，没有就框整个场景。
+    void FitView();
+
     core::ObjectTracker tracker_;
     EngineImpl& engine_;
 
@@ -105,6 +128,7 @@ private:
     Color background_{0.16f, 0.17f, 0.19f, 1.0f};
     RenderMode renderMode_{RenderMode::ShadedWithEdges};
     bool showGrid_{true};
+    bool showHud_{true};
     WorkPlane workPlane_{DefaultWorkPlane()};
     uint32_t pickFilter_{PickFilter_All};
 

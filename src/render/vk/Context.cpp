@@ -327,6 +327,11 @@ CgResult Context::SelectPhysicalDevice(const Config& config) {
     vkGetPhysicalDeviceProperties(physicalDevice_, &props);
     deviceName_ = props.deviceName;
 
+    // 颜色和深度都支持的采样数才算数：MSAA 的两个附件必须同采样，其中一个不支持
+    // 就等于不支持（M6 的 ViewportDesc::sampleCount）。
+    sampleCounts_ = props.limits.framebufferColorSampleCounts &
+                    props.limits.framebufferDepthSampleCounts;
+
     return CgResult::Ok;
 }
 
@@ -443,6 +448,19 @@ CgResult Context::ImmediateSubmit(const std::function<void(VkCommandBuffer)>& re
     CG_VK_REQUIRE(vkWaitForFences(device_, 1, &immediateFence_, VK_TRUE, UINT64_MAX),
                   "vkWaitForFences (immediate)");
     return CgResult::Ok;
+}
+
+VkSampleCountFlagBits Context::ClampSampleCount(uint32_t requested) const {
+    // 从高往低试：宿主要 8x 而设备只到 4x，给 4x 而不是给 1x —— 「尽量满足」比
+    // 「要么全有要么全无」更接近宿主的意思。
+    static constexpr VkSampleCountFlagBits kLadder[] = {
+        VK_SAMPLE_COUNT_8_BIT, VK_SAMPLE_COUNT_4_BIT, VK_SAMPLE_COUNT_2_BIT};
+    for (const VkSampleCountFlagBits bit : kLadder) {
+        if (requested >= static_cast<uint32_t>(bit) && (sampleCounts_ & bit) != 0) {
+            return bit;
+        }
+    }
+    return VK_SAMPLE_COUNT_1_BIT;
 }
 
 CgResult Context::WaitIdle() {

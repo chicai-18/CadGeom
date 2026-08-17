@@ -41,6 +41,10 @@ public:
     /// The engine-global half of a tool's state. Lives here because it is set
     /// through IToolManager and applies to every viewport; the built-in tools
     /// hold a reference to it for the lifetime of the manager.
+    ///
+    /// 可写的那一份是给工具和 ICadEngine2 用的：垂足吸附的参考点和显示单位都住在
+    /// 这里，而它们由「落下了一个点」的工具和宿主分别写入（§6.3、M6 单位系统）。
+    interact::ToolSettings& Settings() { return settings_; }
     const interact::ToolSettings& Settings() const { return settings_; }
 
     /// Installed by whichever viewport is about to dispatch. Switching contexts

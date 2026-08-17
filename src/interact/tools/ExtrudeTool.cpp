@@ -107,7 +107,7 @@ EntityId LoneSelection(IToolContext* ctx) {
 
 class ExtrudeTool final : public ToolBase {
 public:
-    explicit ExtrudeTool(const ToolSettings& settings) : ToolBase(settings) {}
+    explicit ExtrudeTool(ToolSettings& settings) : ToolBase(settings) {}
 
     ToolId GetId() const override { return ToolId::Extrude; }
     const char* GetName() const override { return "Extrude"; }
@@ -345,7 +345,7 @@ private:
 
 } // namespace
 
-void RegisterExtrudeTool(IToolManager& manager, const ToolSettings& settings) {
+void RegisterExtrudeTool(IToolManager& manager, ToolSettings& settings) {
     manager.RegisterTool(new ExtrudeTool(settings));
     CG_DEBUG("registered the extrude tool");
 }

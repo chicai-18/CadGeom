@@ -62,6 +62,16 @@ GraphicsPipelineBuilder& GraphicsPipelineBuilder::SetAlphaBlend(bool enabled) {
     return *this;
 }
 
+GraphicsPipelineBuilder& GraphicsPipelineBuilder::SetColorWrite(bool enabled) {
+    colorWrite_ = enabled;
+    return *this;
+}
+
+GraphicsPipelineBuilder& GraphicsPipelineBuilder::SetSampleCount(VkSampleCountFlagBits samples) {
+    samples_ = samples != 0 ? samples : VK_SAMPLE_COUNT_1_BIT;
+    return *this;
+}
+
 GraphicsPipelineBuilder& GraphicsPipelineBuilder::SetFormats(VkFormat colorFormat,
                                                              VkFormat depthFormat) {
     colorFormat_ = colorFormat;
@@ -115,7 +125,7 @@ CgResult GraphicsPipelineBuilder::Build(Context& ctx, VkPipelineLayout layout,
 
     VkPipelineMultisampleStateCreateInfo multisample{};
     multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.rasterizationSamples = samples_;
     multisample.minSampleShading = 1.0f;
 
     VkPipelineDepthStencilStateCreateInfo depthStencil{};
@@ -126,8 +136,10 @@ CgResult GraphicsPipelineBuilder::Build(Context& ctx, VkPipelineLayout layout,
     depthStencil.maxDepthBounds = 1.0f;
 
     VkPipelineColorBlendAttachmentState blendAttachment{};
-    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    blendAttachment.colorWriteMask =
+        colorWrite_ ? (VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT)
+                    : 0;
     blendAttachment.blendEnable = alphaBlend_ ? VK_TRUE : VK_FALSE;
     blendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;

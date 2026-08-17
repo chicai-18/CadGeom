@@ -13,6 +13,7 @@ add_executable(cadgeom_tests
     test_extrude.cpp
     test_picking.cpp
     test_commands.cpp
+    test_units.cpp
     test_io_registry.cpp
     test_io.cpp)
 

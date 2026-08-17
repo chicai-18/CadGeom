@@ -288,9 +288,10 @@ TEST_CASE("the tool manager owns registered tools", "[tools]") {
         CHECK(CgSucceeded(tools.Activate(ToolId::Rotate)));
         // M4 brought the solids, and Extrude with them.
         CHECK(CgSucceeded(tools.Activate(ToolId::Extrude)));
+        // M6 filled the last two gaps in the built-in set.
+        CHECK(CgSucceeded(tools.Activate(ToolId::Scale)));
+        CHECK(CgSucceeded(tools.Activate(ToolId::Measure)));
 
-        // The ones still to come say which milestone brings them.
-        CHECK(tools.Activate(ToolId::Scale) == CgResult::NotImplemented);
         // An id nobody registered is simply not there.
         CHECK(tools.Activate(static_cast<ToolId>(0x2000)) == CgResult::NotFound);
 

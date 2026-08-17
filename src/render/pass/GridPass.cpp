@@ -8,7 +8,8 @@
 
 namespace cadgeom::render {
 
-CgResult GridPass::Initialize(vk::Context& ctx, VkPipelineLayout layout) {
+CgResult GridPass::Initialize(vk::Context& ctx, VkPipelineLayout layout,
+                              VkSampleCountFlagBits samples) {
     VkShaderModule vertex = VK_NULL_HANDLE;
     VkShaderModule fragment = VK_NULL_HANDLE;
 
@@ -32,6 +33,7 @@ CgResult GridPass::Initialize(vk::Context& ctx, VkPipelineLayout layout) {
         // fragments so they cannot write depth for a line nobody can see.
         .SetDepth(true, true, VK_COMPARE_OP_LESS_OR_EQUAL)
         .SetAlphaBlend(true)
+        .SetSampleCount(samples)
         .SetFormats(kColorFormat, kDepthFormat);
 
     r = builder.Build(ctx, layout, pipeline_);

@@ -18,3 +18,11 @@ CMakeUserPresets.json
 *.ilk
 *.exp
 *.log
+
+# Demo output. The viewer writes these next to wherever it was launched from,
+# so a run in the source tree should not show up as a change.
+cadgeom_demo.*
+cadgeom_warmup.*
+cadgeom_m1.png
+*.png
+!docs/**/*.png

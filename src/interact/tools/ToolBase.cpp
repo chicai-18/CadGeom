@@ -10,7 +10,7 @@
 
 namespace cadgeom::interact {
 
-ToolBase::ToolBase(const ToolSettings& settings) : settings_(settings) {}
+ToolBase::ToolBase(ToolSettings& settings) : settings_(settings) {}
 
 ToolBase::~ToolBase() = default;
 
@@ -130,6 +130,15 @@ bool ToolBase::UpdateHover(const MouseEvent& e, IToolContext* ctx) {
 
 bool ToolBase::BeyondClickSlop(double x0, double y0, double x1, double y1) {
     return std::fabs(x1 - x0) > kClickSlopPixels || std::fabs(y1 - y0) > kClickSlopPixels;
+}
+
+void ToolBase::SetSnapReference(const Vec3d& point) const {
+    settings_.snapReference = point;
+    settings_.hasSnapReference = true;
+}
+
+void ToolBase::ClearSnapReference() const {
+    settings_.hasSnapReference = false;
 }
 
 void ToolBase::ShowPrompt(IToolContext* ctx) const {

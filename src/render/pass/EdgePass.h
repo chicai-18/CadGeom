@@ -21,7 +21,7 @@ namespace cadgeom::render {
 
 class EdgePass {
 public:
-    CgResult Initialize(vk::Context& ctx, VkPipelineLayout layout);
+    CgResult Initialize(vk::Context& ctx, VkPipelineLayout layout, VkSampleCountFlagBits samples);
     void Shutdown(vk::Context& ctx);
 
     /// Draws `snapshot.edgeItems`. The caller has already bound the frame's
@@ -29,8 +29,17 @@ public:
     void Record(VkCommandBuffer cmd, VkPipelineLayout layout, const GpuScene& gpuScene,
                 const SceneSnapshot& snapshot, const RenderView& view) const;
 
+    /// @brief 被挡住的那些边，画成虚线 —— RenderMode::HiddenLine 的第二遍。
+    ///
+    /// 和 Record 同一批线段、同一个实例缓冲，区别只有深度比较反过来（GREATER）：
+    /// 深度测试**没通过**的那些片元才是被遮挡的，把判据翻过来就正好只剩它们。
+    /// 制图上这叫虚线，表示「零件背面确实有这条棱」。
+    void RecordOccluded(VkCommandBuffer cmd, VkPipelineLayout layout, const GpuScene& gpuScene,
+                        const SceneSnapshot& snapshot, const RenderView& view) const;
+
 private:
     VkPipeline pipeline_{VK_NULL_HANDLE};
+    VkPipeline occluded_{VK_NULL_HANDLE};
 };
 
 } // namespace cadgeom::render

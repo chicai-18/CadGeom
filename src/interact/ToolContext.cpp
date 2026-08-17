@@ -52,8 +52,14 @@ bool ToolContext::ScreenToWorkPlane(double x, double y, Vec3d& out) const {
 bool ToolContext::SnapAt(double x, double y, SnapResult& out) const {
     WorkPlane plane{};
     viewport_.GetWorkPlane(plane);
-    return FindSnap(snapSource_, camera_, plane, x, y, settings_.snapMask,
-                    settings_.tolerancePixels, gridSpacing_, out);
+
+    SnapQuery query{};
+    query.mask = settings_.snapMask;
+    query.tolerancePixels = settings_.tolerancePixels;
+    query.gridSpacing = gridSpacing_;
+    query.reference = settings_.snapReference;
+    query.hasReference = settings_.hasSnapReference;
+    return FindSnap(snapSource_, camera_, plane, x, y, query, out);
 }
 
 bool ToolContext::PickAt(double x, double y, uint32_t pickFilter, PickResult& out) const {
@@ -73,10 +79,9 @@ void ToolContext::SetStatusText(const char* utf8Text) {
         return;
     }
     status_ = text;
-    // Nothing displays this yet: the status bar arrives with the ImGui panels in
-    // M6, and there is deliberately no accessor on IViewport for it until there
-    // is something on the other end. Tracing it keeps a tool's state machine
-    // visible in the meantime.
+    // 两个去处：引擎自绘的 HUD（视口每帧从 StatusText() 取），以及宿主自己的面板
+    // （ICadEngine2::GetStatusText）。IViewport 上没有它的访问器，因为那个接口已经
+    // 冻结 —— 扩展槽就是为这种事留的（§2.2 第 3 条）。
     CG_TRACE("tool status: %s", status_.c_str());
 }
 

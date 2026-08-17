@@ -28,6 +28,12 @@ public:
     GraphicsPipelineBuilder& SetDepthBias(float constantFactor, float slopeFactor);
     /// Straight source-over alpha blending; off means the fragment replaces.
     GraphicsPipelineBuilder& SetAlphaBlend(bool enabled);
+    /// @brief 关掉颜色写入，只留深度。隐藏线模式的第一遍靠它：把实体的深度铺出来
+    ///        但不上色，边才有东西可以被遮挡（M6 的 RenderMode::HiddenLine）。
+    GraphicsPipelineBuilder& SetColorWrite(bool enabled);
+    /// @brief 光栅化采样数。必须和它将要写入的附件一致，所以每个采样数都要一条
+    ///        自己的管线（M6 的 MSAA）。
+    GraphicsPipelineBuilder& SetSampleCount(VkSampleCountFlagBits samples);
     GraphicsPipelineBuilder& SetFormats(VkFormat colorFormat, VkFormat depthFormat);
 
     CgResult Build(Context& ctx, VkPipelineLayout layout, VkPipeline& out) const;
@@ -50,6 +56,8 @@ private:
     float depthBiasSlope_{0.0f};
 
     bool alphaBlend_{false};
+    bool colorWrite_{true};
+    VkSampleCountFlagBits samples_{VK_SAMPLE_COUNT_1_BIT};
 
     VkFormat colorFormat_{VK_FORMAT_UNDEFINED};
     VkFormat depthFormat_{VK_FORMAT_UNDEFINED};

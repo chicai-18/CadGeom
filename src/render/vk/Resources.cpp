@@ -97,7 +97,7 @@ void DestroyBuffer(Context& ctx, Buffer& buffer) {
 }
 
 CgResult CreateImage2D(Context& ctx, VkFormat format, VkExtent2D extent, VkImageUsageFlags usage,
-                       VkImageAspectFlags aspect, Image& out) {
+                       VkImageAspectFlags aspect, Image& out, VkSampleCountFlagBits samples) {
     out = Image{};
 
     VkImageCreateInfo info{};
@@ -107,7 +107,7 @@ CgResult CreateImage2D(Context& ctx, VkFormat format, VkExtent2D extent, VkImage
     info.extent = {extent.width, extent.height, 1};
     info.mipLevels = 1;
     info.arrayLayers = 1;
-    info.samples = VK_SAMPLE_COUNT_1_BIT;
+    info.samples = samples != 0 ? samples : VK_SAMPLE_COUNT_1_BIT;
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
     info.usage = usage;
     info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;

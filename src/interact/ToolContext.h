@@ -29,9 +29,29 @@ struct ToolSettings {
     /// Line and polyline tools keep going after each segment.
     bool continuous{false};
     /// Which SnapType bits are live.
-    uint32_t snapMask{Snap_Endpoint | Snap_Midpoint | Snap_Center | Snap_Intersection};
+    uint32_t snapMask{Snap_Endpoint | Snap_Midpoint | Snap_Center | Snap_Intersection |
+                      Snap_Perpendicular};
     /// Snap search radius, in pixels.
     double tolerancePixels{8.0};
+
+    /// @brief 垂足吸附的参考点 —— 「上一个点」。
+    ///
+    /// 住在这里而不是在工具自己身上，是因为 `IToolContext::SnapAt` 冻结的签名里
+    /// 传不进它，而这份设置正是工具与引擎共有的那半边状态。内置工具落下第一个点
+    /// 时设它，宿主则通过 `ICadEngine2::SetSnapReference` 设
+    /// （docs/architecture.md §6.3）。
+    Vec3d snapReference{0.0, 0.0, 0.0};
+    bool hasSnapReference{false};
+
+    /// 显示单位。Measure 工具的读数和 HUD 都从这里取；它不影响任何几何。
+    UnitSettings units{};
+
+    /// @brief 最近一次量完的距离，模型单位。宿主从 ICadEngine2::GetMeasurement
+    ///        读它 —— Measure 是唯一一个不改场景的工具，结果没有别的地方可放。
+    Vec3d measureFrom{0.0, 0.0, 0.0};
+    Vec3d measureTo{0.0, 0.0, 0.0};
+    double measureDistance{0.0};
+    bool hasMeasurement{false};
 };
 
 class ToolContext final : public IToolContext {

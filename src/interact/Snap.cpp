@@ -31,8 +31,7 @@ constexpr uint32_t kGeometryMask = Snap_Endpoint | Snap_Midpoint | Snap_Center |
 } // namespace
 
 bool FindSnap(const ISnapSource* source, const ICamera& camera, const WorkPlane& plane,
-              double screenX, double screenY, uint32_t mask, double tolerancePixels,
-              double gridSpacing, SnapResult& out) {
+              double screenX, double screenY, const SnapQuery& query, SnapResult& out) {
     Ray ray{};
     camera.ScreenToRay(screenX, screenY, ray);
 
@@ -45,14 +44,17 @@ bool FindSnap(const ISnapSource* source, const ICamera& camera, const WorkPlane&
     out.point = raw;
     out.entity = kInvalidEntity;
 
-    const uint32_t geometryMask = mask & kGeometryMask;
-    if (source && geometryMask != 0 && tolerancePixels > 0.0) {
+    const uint32_t geometryMask = query.mask & kGeometryMask;
+    if (source && geometryMask != 0 && query.tolerancePixels > 0.0) {
         // 搜索半径从原始落点处的像素尺寸换算 —— 候选点还没找到，没有别的地方
         // 可以量这个比例。
-        const double radius = camera.GetPixelWorldSize(raw) * tolerancePixels;
+        const double radius = camera.GetPixelWorldSize(raw) * query.tolerancePixels;
+
+        SnapQuery narrowed = query;
+        narrowed.mask = geometryMask;
 
         std::vector<SnapCandidate> candidates;
-        source->CollectSnapCandidates(raw, radius, geometryMask, candidates);
+        source->CollectSnapCandidates(raw, radius, narrowed, candidates);
 
         const SnapCandidate* best = nullptr;
         int bestPriority = 0;
@@ -65,7 +67,7 @@ bool FindSnap(const ISnapSource* source, const ICamera& camera, const WorkPlane&
             const double dx = pixel.x - screenX;
             const double dy = pixel.y - screenY;
             const double pixels = std::sqrt(dx * dx + dy * dy);
-            if (pixels > tolerancePixels) {
+            if (pixels > query.tolerancePixels) {
                 continue;
             }
             const int priority = Priority(candidate.type);
@@ -87,8 +89,8 @@ bool FindSnap(const ISnapSource* source, const ICamera& camera, const WorkPlane&
 
     // 几何吸附没命中才轮到网格：吸到一条看得见的几何上，永远比吸到一个想象中的
     // 格点更接近用户的意图。
-    if ((mask & Snap_Grid) != 0 && gridSpacing > 0.0) {
-        out.point = SnapToGrid(plane, raw, gridSpacing);
+    if ((query.mask & Snap_Grid) != 0 && query.gridSpacing > 0.0) {
+        out.point = SnapToGrid(plane, raw, query.gridSpacing);
         out.type = Snap_Grid;
     }
     return true;

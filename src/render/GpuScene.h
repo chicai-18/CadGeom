@@ -28,6 +28,14 @@ struct DrawItem {
 struct CurveItem {
     Mat4d worldTransform{Mat4Identity()};
     Color color{0.75f, 0.76f, 0.78f, 1.0f};
+    /// @brief 这条线**独自**出现时该用的颜色 —— 身后没有表面给它作衬的时候。
+    ///
+    /// 实体的特征边平时用 `EntityStyle::edgeColor`，那是个近黑色，因为它画在一块
+    /// 浅灰的面上。可 `RenderMode::HiddenLine` 把面关掉了，近黑的边落在深色背景上
+    /// 就什么都看不见 —— 「黑边」靠的是对比，不是黑。所以那种模式下改用这一个
+    /// （实体自己的表面色），线框图在浅背景和深背景上都读得出来。
+    /// 曲线本来就是独自出现的，两个颜色对它们是同一个。
+    Color soloColor{0.75f, 0.76f, 0.78f, 1.0f};
     float width{1.5f};  ///< Screen-space pixels.
     LineStyle style{LineStyle::Solid};
     uint32_t curveIndex{0};

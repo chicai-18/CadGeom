@@ -2,9 +2,14 @@
 
 #include <cadgeom/ICommandStack.h>
 
+#include <cadgeom/ISelection.h>
+
 #include "api/EngineImpl.h"
 #include "core/Error.h"
 #include "core/Log.h"
+#include "core/Units.h"
+
+#include <stdio.h>
 
 #include <algorithm>
 #include <cmath>
@@ -23,6 +28,18 @@ constexpr double kMinPixelsPerGridCell = 18.0;
 /// 拾取容差，屏幕像素（docs/architecture.md §6.3）。它是「点得准」和「点得中」
 /// 之间的那条线：小了细线选不上，大了两条挨着的线分不开。
 constexpr double kPickPixels = 6.0;
+
+/// HUD 的排版。字高压得比正文小一点：它是背景信息，不该跟图纸抢。
+constexpr float kHudTextPixels = 12.0f;
+constexpr double kHudMarginPixels = 14.0;
+constexpr Color kHudStatusColor{0.95f, 0.95f, 0.95f, 1.0f};
+constexpr Color kHudDimColor{0.45f, 0.52f, 0.60f, 1.0f};
+
+/// ZoomToFit 留多少余量。1.0 是正好贴边，这个数在四周留一点呼吸的地方。
+constexpr double kFitMargin = 1.2;
+
+/// RenderMode 的显示名，下标就是枚举值。笔画字体只认 ASCII，所以是英文。
+const char* const kRenderModeNames[4] = {"SHADED", "SHADED+EDGES", "WIREFRAME", "HIDDEN LINE"};
 
 /// Snaps to a 1-2-5 sequence: the spacings a person reads off a drawing without
 /// having to think about it.
@@ -63,13 +80,8 @@ CgResult ViewportImpl::Initialize(const ViewportDesc& desc) {
     background_ = desc.background;
     showGrid_ = desc.showGrid;
 
-    if (desc.sampleCount > 1) {
-        // Not silently ignored: MSAA is an offscreen-target change, and a host
-        // that asked for it should know it did not get it.
-        CG_WARN("ViewportDesc::sampleCount %u ignored; multisampling arrives with M6",
-                desc.sampleCount);
-    }
-
+    // MSAA 由渲染器接手：它把 desc.sampleCount 收到设备真支持的那一档上，降了会
+    // 说一声（M6）。
     CgResult r = renderer_.Initialize(engine_.Renderer(), *surface_, desc);
     if (CgFailed(r)) {
         return r;
@@ -83,6 +95,10 @@ CgResult ViewportImpl::Initialize(const ViewportDesc& desc) {
     camera_.SetProjection(desc.projection);
     camera_.SetStandardView(StandardView::Isometric);
     camera_.ZoomToFit(nullptr, 1.4);
+
+    // 文字要相机才画得出来：字形按屏幕像素排，得知道一个像素在锚点那儿有多大、
+    // 屏幕的右和上在世界里指哪儿（M6 的叠加层文字）。
+    overlayBuilder_.SetCamera(&camera_);
 
     render::SurfaceCallbacks callbacks;
     callbacks.onResize = [this](uint32_t w, uint32_t h) { OnSurfaceResized(w, h); };
@@ -325,7 +341,7 @@ bool ViewportImpl::HandleCameraMouse(const MouseEvent& e, double dx, double dy) 
 
         case MouseAction::DoubleClick:
             if (e.button == MouseButton::Middle) {
-                camera_.ZoomToFit(nullptr, 1.2);
+                FitView();
                 return true;
             }
             return false;
@@ -393,6 +409,8 @@ bool ViewportImpl::HandleToolKey(const KeyEvent& e) {
         case 'E': id = ToolId::Extrude;   break;
         case 'M': id = ToolId::Move;      break;
         case 'T': id = ToolId::Rotate;    break;  // R 已经给了矩形，T 取 turn。
+        case 'S': id = ToolId::Scale;     break;
+        case 'D': id = ToolId::Measure;   break;  // M 已经给了移动，D 取 dimension。
         default: return false;
     }
 
@@ -414,7 +432,7 @@ bool ViewportImpl::HandleCameraKey(const KeyEvent& e) {
         case '6': camera_.SetStandardView(StandardView::Bottom);    return true;
         case '7': camera_.SetStandardView(StandardView::Isometric); return true;
         case 'F':
-            camera_.ZoomToFit(nullptr, 1.2);
+            FitView();
             return true;
         case 'P':
             camera_.SetProjection(camera_.GetProjection() == ProjectionMode::Orthographic
@@ -424,10 +442,16 @@ bool ViewportImpl::HandleCameraKey(const KeyEvent& e) {
         case 'G':
             showGrid_ = !showGrid_;
             return true;
-        case 'W':
-            renderMode_ = renderMode_ == RenderMode::Wireframe ? RenderMode::ShadedWithEdges
-                                                               : RenderMode::Wireframe;
+        case 'H':
+            showHud_ = !showHud_;
             return true;
+        case 'W': {
+            // 四种模式轮着来。M6 之前这里只是「线框开/关」，但隐藏线做出来之后
+            // 那就成了一个够不着第四档的开关。
+            const int next = (static_cast<int>(renderMode_) + 1) & 3;
+            renderMode_ = static_cast<RenderMode>(next);
+            return true;
+        }
         default:
             return false;
     }
@@ -476,11 +500,57 @@ render::RenderView ViewportImpl::BuildRenderView() const {
     view.showGrid = showGrid_;
     // 线框模式下不画表面，只留特征边和曲线 —— CAD 的线框图指的就是这个。着色模式
     // 反过来，只有面没有边。默认的 ShadedWithEdges 两样都要，也是 M4 的验收样子：
-    // 带轮廓黑边的实体。RenderMode::HiddenLine 暂时按 ShadedWithEdges 处理，它要的
-    // 「被遮挡的边画成虚线」得等 M6 的第二遍深度。
+    // 带轮廓黑边的实体。
+    //
+    // HiddenLine 是第四种：表面只写深度不上色，被它挡住的边照画，但画成虚线。
+    // 出来的图和一张工程图纸是同一回事 —— 全是线，而背面那些线你看得见、也知道
+    // 它们在背面（M6）。
     view.drawSurfaces = renderMode_ != RenderMode::Wireframe;
     view.drawEdges = renderMode_ != RenderMode::Shaded;
+    view.depthOnlySurfaces = renderMode_ == RenderMode::HiddenLine;
+    view.drawOccluded = renderMode_ == RenderMode::HiddenLine;
     return view;
+}
+
+void ViewportImpl::BuildHud() {
+    // 按相机的视口尺寸摆，不是按渲染目标当下的大小：窗口刚改过尺寸而目标还没重建
+    // 的那一帧里两者不同，而这一帧画出来的画面用的是相机那一个。
+    const uint32_t height = camera_.ViewportHeight();
+    if (camera_.ViewportWidth() == 0 || height == 0) {
+        return;
+    }
+
+    const interact::ToolSettings& settings = engine_.Tools().Settings();
+    const ITool* tool = engine_.Tools().GetActiveToolInterface();
+
+    char grid[64];
+    core::FormatLength(settings.units, GridSpacing(), grid, sizeof(grid));
+
+    char summary[256];
+    snprintf(summary, sizeof(summary), "%s | %s %s | GRID %s%s", tool ? tool->GetName() : "None",
+             kRenderModeNames[static_cast<int>(renderMode_) & 3],
+             camera_.GetProjection() == ProjectionMode::Perspective ? "PERSP" : "ORTHO", grid,
+             renderer_.SampleCount() > 1 ? " | MSAA" : "");
+
+    // 从底边往上排：状态行贴着底，摘要在它上面一行。左下角是 CAD 一贯的命令行
+    // 位置，图纸本身在中间不受打扰。
+    const double x = kHudMarginPixels;
+    const double bottom = static_cast<double>(height) - kHudMarginPixels;
+    const double lineStep = kHudTextPixels * interact::kStrokeLineHeight;
+
+    overlayBuilder_.AddScreenText(x, bottom, StatusText(), kHudStatusColor, kHudTextPixels);
+    overlayBuilder_.AddScreenText(x, bottom - lineStep, summary, kHudDimColor, kHudTextPixels);
+}
+
+void ViewportImpl::FitView() {
+    // 有选中就框选中的那部分 —— 「按 F 看看这个」问的是选中的东西，不是整张图。
+    const ISelection* selection = engine_.Scene().GetSelection();
+    Aabb bounds{};
+    if (selection && selection->GetCount() > 0 && selection->GetBounds(bounds)) {
+        camera_.ZoomToFit(&bounds, kFitMargin);
+        return;
+    }
+    camera_.ZoomToFit(nullptr, kFitMargin);
 }
 
 CgResult ViewportImpl::Render() {
@@ -499,6 +569,9 @@ CgResult ViewportImpl::Render() {
         engine_.Scene().GetGeometryBuilder()->GetTessParams(tess);
         overlayBuilder_.SetTessParams(tess);
         tool->BuildPreview(&overlayBuilder_, &toolContext_);
+    }
+    if (showHud_) {
+        BuildHud();
     }
 
     return renderer_.Render(BuildRenderView(), engine_.Snapshot(), overlay_);

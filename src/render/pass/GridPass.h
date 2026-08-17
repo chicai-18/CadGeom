@@ -12,7 +12,7 @@ namespace cadgeom::render {
 
 class GridPass {
 public:
-    CgResult Initialize(vk::Context& ctx, VkPipelineLayout layout);
+    CgResult Initialize(vk::Context& ctx, VkPipelineLayout layout, VkSampleCountFlagBits samples);
     void Shutdown(vk::Context& ctx);
 
     /// The caller has already bound the frame's descriptor set.

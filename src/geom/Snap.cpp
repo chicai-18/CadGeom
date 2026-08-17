@@ -60,6 +60,50 @@ void NearSegments(const PolylineData& wire, const Mat4d& world, const Vec3d& cen
     }
 }
 
+/// 线段上的垂足，夹在两端之间。落在端点上的不算 —— 那已经是端点吸附的活儿，
+/// 报两遍只会让优先级表白忙一场。
+void AddFootOnSegment(std::vector<SnapPoint>& out, const Mat4d& world, const Vec3d& a,
+                      const Vec3d& b, const Vec3d& reference) {
+    const Vec3d ab = b - a;
+    const double lenSq = LengthSq(ab);
+    if (lenSq < kEpsilon) {
+        return;
+    }
+    const double t = Dot(reference - a, ab) / lenSq;
+    if (t <= kEpsilon || t >= 1.0 - kEpsilon) {
+        return;
+    }
+    out.push_back(SnapPoint{Snap_Perpendicular, TransformPoint(world, a + ab * t)});
+}
+
+/// 圆/圆弧上的垂足。整圆一定有解；圆弧要看那个角在不在扫描区间里。
+void AddFootOnArc(std::vector<SnapPoint>& out, const Mat4d& world, const Plane& plane,
+                  double radius, double startAngle, double sweepAngle, const Vec3d& reference) {
+    if (!(radius > 0.0)) {
+        return;
+    }
+    const WorkPlane frame = FrameOf(plane);
+    const Vec3d foot =
+        ClosestPointOnCircle(frame.origin, frame.normal, radius, reference, frame.uAxis);
+
+    if (std::fabs(sweepAngle) < kTwoPi - kEpsilon) {
+        const Vec3d radial = foot - frame.origin;
+        const double angle = std::atan2(Dot(radial, frame.vAxis), Dot(radial, frame.uAxis));
+        double offset = angle - startAngle;
+        if (sweepAngle < 0.0) {
+            offset = -offset;
+        }
+        offset = std::fmod(offset, kTwoPi);
+        if (offset < 0.0) {
+            offset += kTwoPi;
+        }
+        if (offset > std::fabs(sweepAngle)) {
+            return;  // 垂足落在圆弧的延长线上，图纸上没有那个点。
+        }
+    }
+    out.push_back(SnapPoint{Snap_Perpendicular, TransformPoint(world, foot)});
+}
+
 } // namespace
 
 void CollectSnapPoints(const Shape& shape, const Mat4d& world, uint32_t mask,
@@ -157,6 +201,71 @@ void CollectSnapPoints(const Shape& shape, const Mat4d& world, uint32_t mask,
 
         case ShapeType::None:
         default:
+            break;
+    }
+}
+
+void CollectPerpendicularPoints(const Shape& shape, const Mat4d& world, const Vec3d& reference,
+                                std::vector<SnapPoint>& out) {
+    // 参考点折回对象空间，垂足算完再变回去。曲线的参数化定义住在对象空间里，把
+    // 一个点搬过去比把整条曲线搬过来便宜得多。
+    const Vec3d local = TransformPoint(Inverse(world), reference);
+
+    const ShapeDef& def = shape.def;
+    const ShapeParams& p = def.params;
+    switch (p.type) {
+        case ShapeType::Line:
+            AddFootOnSegment(out, world, p.line.start, p.line.end, local);
+            break;
+
+        case ShapeType::Circle:
+            AddFootOnArc(out, world, p.circle.plane, p.circle.radius, 0.0, kTwoPi, local);
+            break;
+
+        case ShapeType::Arc:
+            AddFootOnArc(out, world, p.arc.plane, p.arc.radius, p.arc.startAngle, p.arc.sweepAngle,
+                         local);
+            break;
+
+        case ShapeType::Rectangle: {
+            Vec3d corners[4];
+            RectangleCorners(p.rectangle.plane, p.rectangle.uAxis, p.rectangle.width,
+                             p.rectangle.height, corners);
+            for (int i = 0; i < 4; ++i) {
+                AddFootOnSegment(out, world, corners[i], corners[(i + 1) & 3], local);
+            }
+            break;
+        }
+
+        case ShapeType::Polyline: {
+            const std::vector<Vec3d>& points = def.points;
+            for (size_t i = 0; i + 1 < points.size(); ++i) {
+                AddFootOnSegment(out, world, points[i], points[i + 1], local);
+            }
+            if (def.closed && points.size() >= 3) {
+                AddFootOnSegment(out, world, points.back(), points.front(), local);
+            }
+            break;
+        }
+
+        // 实体和导入的网格走它们的特征边。线框上的每一段都是一条真的棱（圆柱侧面
+        // 那些细分痕迹从来就没进过线框），所以逐段求垂足问的正是「垂直于零件上的
+        // 哪条边」。
+        case ShapeType::Mesh:
+        case ShapeType::Solid: {
+            const PolylineData& wire = shape.wire;
+            const uint32_t segments = wire.SegmentCount();
+            for (uint32_t s = 0; s < segments; ++s) {
+                AddFootOnSegment(out, world, wire.positions[wire.indices[s * 2]],
+                                 wire.positions[wire.indices[s * 2 + 1]], local);
+            }
+            break;
+        }
+
+        case ShapeType::Point:
+        case ShapeType::None:
+        default:
+            // 一个点没有「垂直于它」可言。
             break;
     }
 }

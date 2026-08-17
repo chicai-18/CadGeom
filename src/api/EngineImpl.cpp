@@ -8,6 +8,7 @@
 #include "core/Log.h"
 #include "interact/tools/DrawTools.h"
 #include "interact/tools/ExtrudeTool.h"
+#include "interact/tools/MeasureTool.h"
 #include "interact/tools/TransformTools.h"
 #include "io/Registry.h"
 
@@ -48,7 +49,8 @@ EngineImpl::EngineImpl(const EngineDesc& desc)
       scene_(),
       tools_(*this),
       ioBridge_(scene_),
-      io_(*this) {
+      io_(*this),
+      extension_(*this) {
     g_liveEngines.fetch_add(1, std::memory_order_relaxed);
 
     // The built-ins are engine-owned like any other registered tool, so they go
@@ -57,6 +59,7 @@ EngineImpl::EngineImpl(const EngineDesc& desc)
     interact::RegisterBuiltinTools(tools_, tools_.Settings());
     interact::RegisterExtrudeTool(tools_, tools_.Settings());
     interact::RegisterTransformTools(tools_, tools_.Settings());
+    interact::RegisterMeasureTool(tools_, tools_.Settings());
     tools_.Activate(ToolId::Select);
 
     // 内置的 OBJ / glTF 处理器走的是宿主注册自己格式时走的同一条路，一点特权都没有
@@ -276,6 +279,9 @@ void EngineImpl::UpdateSnapshot() {
             item.curveIndex = curveIndex;
             item.worldTransform = world;
             item.color = isSolid ? style.edgeColor : style.color;
+            // 隐藏线模式下表面不上色，近黑的 edgeColor 就没有东西可以对比了，那时
+            // 用实体自己的颜色（render::CurveItem::soloColor 的说明）。
+            item.soloColor = style.color;
             item.width = style.lineWidth;
             item.style = isSolid ? LineStyle::Solid : style.lineStyle;
             (isSolid ? snapshot_.edgeItems : snapshot_.curveItems).push_back(item);
@@ -344,7 +350,11 @@ const char* EngineImpl::GetDeviceName() const {
 }
 
 void* EngineImpl::GetExtension(uint32_t interfaceId) {
-    (void)interfaceId;
+    // 借出去的指针，不是新对象：宿主没有 Release 可调，这个对象随引擎一起活
+    // （§2.2 第 3 条）。不认识的 id 返回 null，宿主据此判断这个版本的库有没有它。
+    if (interfaceId == ExtensionId_Engine2) {
+        return static_cast<ICadEngine2*>(&extension_);
+    }
     return nullptr;
 }
 

@@ -386,8 +386,10 @@ bool SceneImpl::Raycast(const Ray& ray, uint32_t pickFilter, PickResult& out) co
     return interact::Raycast(bvh_, *this, ray, pickFilter, tolerance, out);
 }
 
-void SceneImpl::CollectSnapCandidates(const Vec3d& center, double radius, uint32_t mask,
+void SceneImpl::CollectSnapCandidates(const Vec3d& center, double radius,
+                                      const interact::SnapQuery& query,
                                       std::vector<interact::SnapCandidate>& out) const {
+    const uint32_t mask = query.mask;
     if (!(radius > 0.0) || mask == 0) {
         return;
     }
@@ -417,6 +419,11 @@ void SceneImpl::CollectSnapCandidates(const Vec3d& center, double radius, uint32
 
         points.clear();
         geom::CollectSnapPoints(*shape, world, mask, points);
+        // 垂足单独走一趟：它需要参考点，而参考点不是形状的属性 —— 没有「上一个
+        // 点」的时候，这一类吸附整个不存在（docs/architecture.md §6.3）。
+        if ((mask & Snap_Perpendicular) != 0 && query.hasReference) {
+            geom::CollectPerpendicularPoints(*shape, world, query.reference, points);
+        }
         for (const geom::SnapPoint& point : points) {
             if (Distance(point.point, center) <= radius) {
                 out.push_back(interact::SnapCandidate{point.type, point.point, id});

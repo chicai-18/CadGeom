@@ -61,6 +61,12 @@ public:
     // -- Engine-side --------------------------------------------------------
 
     void SetViewportSize(uint32_t width, uint32_t height);
+    /// @brief 投影矩阵此刻用的视口尺寸，像素。
+    /// @note 屏幕空间的东西（HUD 的位置）要按它来摆，而不是按渲染目标当下的大小：
+    ///       窗口刚改过尺寸、目标还没重建的那一帧里，两者是不一样的，而画出来的
+    ///       画面用的是这一个。
+    uint32_t ViewportWidth() const { return viewportWidth_; }
+    uint32_t ViewportHeight() const { return viewportHeight_; }
     /// Lets ZoomToFit(nullptr, ...) mean "the whole scene".
     void SetScene(const IScene* scene) { scene_ = scene; }
 

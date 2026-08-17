@@ -522,4 +522,54 @@ inline bool RayPlaneIntersect(const Ray& ray, const Vec3d& planeOrigin,
 #pragma warning(pop)
 #endif
 
+// ---------------------------------------------------------------------------
+// 垂足（M6 的 Snap_Perpendicular）
+//
+// 「从上一个点向这条曲线作垂线，落在哪儿」。放在这里而不是 geom/ 里，是因为它
+// 是纯粹的解析几何 —— 不需要形状、不需要缓存、不需要内核，而这一层是头文件，
+// 单元测试够得着（tests/ 不链接内部符号）。
+// ---------------------------------------------------------------------------
+
+/// @brief 线段 [a, b] 上离 `p` 最近的点。
+/// @param clampToSegment true 时结果被夹在端点之间（真实的线段），false 时落在
+///        无限长的直线上。
+/// @note 退化成一个点的线段直接返回 `a` —— 那条线上每个点都是最近点。
+inline Vec3d ClosestPointOnSegment(const Vec3d& a, const Vec3d& b, const Vec3d& p,
+                                   bool clampToSegment = true) {
+    const Vec3d ab = b - a;
+    const double lenSq = LengthSq(ab);
+    if (lenSq < kEpsilon) {
+        return a;
+    }
+    double t = Dot(p - a, ab) / lenSq;
+    if (clampToSegment) {
+        t = t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t);
+    }
+    return a + ab * t;
+}
+
+/// @brief 从 `p` 向以 `plane`/`radius` 定义的圆作垂线的垂足。
+///
+/// 圆上离 `p` 最近的点：把 `p` 投影到圆所在平面上，再沿圆心到投影点的方向走一个
+/// 半径。这个点上的切线与到 `p` 的连线正交 —— 那正是垂足的定义。
+///
+/// @param uAxis 圆平面内的参考轴，只用来处理退化情况（`p` 正好落在轴线上时，
+///              每个方向都同样近，得任选一个才有确定的答案）。
+/// @return 垂足；`radius` 不为正时返回圆心。
+inline Vec3d ClosestPointOnCircle(const Vec3d& center, const Vec3d& normal, double radius,
+                                  const Vec3d& p, const Vec3d& uAxis = Vec3d{1.0, 0.0, 0.0}) {
+    if (!(radius > 0.0)) {
+        return center;
+    }
+    const Vec3d n = Normalized(normal);
+    Vec3d radial = (p - center) - n * Dot(p - center, n);
+    if (LengthSq(radial) < kEpsilon) {
+        radial = uAxis - n * Dot(uAxis, n);
+        if (LengthSq(radial) < kEpsilon) {
+            radial = Perpendicular(n);
+        }
+    }
+    return center + Normalized(radial) * radius;
+}
+
 } // namespace cadgeom

@@ -40,6 +40,22 @@ struct SnapPoint {
 void CollectSnapPoints(const Shape& shape, const Mat4d& world, uint32_t mask,
                        std::vector<SnapPoint>& out);
 
+/// @brief 从 `reference` 向这个形状上的曲线作垂线，把垂足追加到 `out`。
+/// @param shape     已细分的形状。
+/// @param world     该形状所属实体的世界变换。
+/// @param reference 参考点，世界坐标 —— 「上一个点」。
+/// @note 这是 `CollectSnapPoints` 唯一没法一起做的一类特征点：垂足不是曲线自己
+///       的属性，它取决于从哪儿看过去。参考点由 ICadEngine2::SetSnapReference
+///       给出（内置工具落下第一个点时自动设），没有它就没有垂足可言
+///       （docs/architecture.md §6.3）。
+/// @note 垂足夹在曲线的实际范围内：线段夹在两端之间，圆弧夹在扫描角之内。一条
+///       延长线上的垂足在图纸上不存在，吸到那儿只会让人莫名其妙。
+/// @warning 计算在对象空间里做，结果再变回世界空间。实体带非均匀缩放时「垂直」
+///          这件事本身在两个空间里就不是同一件事，此时结果是曲线上的一个近似点，
+///          而不是严格的垂足。
+void CollectPerpendicularPoints(const Shape& shape, const Mat4d& world, const Vec3d& reference,
+                                std::vector<SnapPoint>& out);
+
 /// @brief 两条离散曲线在 `center` 附近 `radius` 内的交点。
 /// @param a      第一条曲线的线框，@param worldA 它的世界变换。
 /// @param b      第二条曲线的线框，@param worldB 它的世界变换。

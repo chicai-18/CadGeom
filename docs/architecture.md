@@ -25,7 +25,7 @@
 | 相机 | 默认**正交**，可切透视 | CAD 制图以正交为主 |
 | 拾取 | **CPU 射线 + BVH**（GPU ID buffer 作为可选加速后端） | 拾取要区分点/边/面并支持吸附，GPU ID 给不了这些语义 |
 | 线条渲染 | **屏幕空间 quad 扩展**（instanced） | `wideLines` feature 不保证支持、宽度不可靠，且无法做虚线/线型 |
-| UI | Dear ImGui（仅 examples 用，不进核心库） | 核心库保持无 UI 依赖 |
+| UI | 引擎侧只有笔画字体画的 HUD；真正的面板归宿主 | 核心库保持无 UI 依赖。M6 没有引入 ImGui —— 理由见 §7.1 |
 
 ---
 
@@ -67,9 +67,10 @@ CadGeom/
 │   ├─ IEngine.h  IScene.h  IEntity.h  IViewport.h
 │   ├─ IGeometryBuilder.h     点/线/圆/矩形/拉伸的创建接口
 │   ├─ ITool.h  ICamera.h  ISelection.h  ICommandStack.h
-│   └─ IImportExport.h
+│   ├─ IImportExport.h
+│   └─ IEngineExt.h           ★ ICadEngine2：扩展槽里的 M6 能力（§7.1）
 ├─ src/
-│   ├─ core/                  Math.h(double) · Handle.h · Log · EventBus · SmallVector
+│   ├─ core/                  Math.h(double) · Log · Error · File · Png · Units(显示单位)
 │   ├─ geom/
 │   │   ├─ Kernel.h/.cpp      IGeometryKernel 实现（SimpleKernel）
 │   │   ├─ Curve.h/.cpp       Line/Circle/Rectangle/Polyline 参数化定义
@@ -94,8 +95,9 @@ CadGeom/
 │   │   ├─ WorkPlane.h/.cpp   ★ 2D 图元创建的落点平面
 │   │   ├─ Picker.h/.cpp      射线 → BVH → 点/边/面优先级
 │   │   ├─ Snap.h/.cpp        端点/中点/圆心/交点/网格
-│   │   ├─ Gizmo.h/.cpp       平移箭头 + 旋转圆环
-│   │   └─ tools/             Select/Point/Line/Circle/Rect/Extrude/Move/Rotate
+│   │   ├─ Gizmo.h/.cpp       平移箭头 + 旋转圆环 + 缩放标尺
+│   │   ├─ TextStroke.h/.cpp  ★ 笔画字体：文本 → 折线，叠加层的文字靠它
+│   │   └─ tools/             Select/Point/Line/Circle/Rect/Extrude/Move/Rotate/Scale/Measure
 │   ├─ io/
 │   │   ├─ Registry.h/.cpp    格式 → Importer/Exporter 工厂
 │   │   ├─ SceneAccess.h      ★ ISceneSource / ISceneSink，io/ 看场景的两面
@@ -273,7 +275,7 @@ M4 的落地细节：
 | `EdgePass` | 实体轮廓与特征边 | 从 `Topology.edges` 直接取线段，和 `LinePass` 共用那对着色器与同一个实例缓冲：一条边和一条曲线在 GPU 上是同一种东西。不同的是不写深度、取 `EntityStyle::edgeColor`，而且 `RenderMode::Shaded` 下整批不画。CAD 的「黑边」是可读性核心 |
 | `LinePass` | 独立线/圆/矩形线框 | **屏幕空间 quad 扩展**：instanced draw，每段线 1 个 instance，VS 在 NDC 空间按 `lineWidth` 撑开四边形；支持虚线（沿弧长累计 + `discard`） |
 | `PointPass` | 点图元 | instanced billboard quad，FS 里画圆并 `discard` 外部像素 |
-| `OverlayPass` | Gizmo / 高亮 / 橡皮筋预览 | 独立 depth 策略（Gizmo 常关深度测试保证永远可见） |
+| `OverlayPass` | Gizmo / 高亮 / 橡皮筋预览 / 屏幕文字 | 独立 depth 策略（Gizmo 常关深度测试保证永远可见）。M6 的文字也在这里：笔画字体拆成线段，走的还是 `LinePass` 那对着色器 |
 
 防 z-fighting 的偏移**加在实体表面上，不加在边上**：`MeshPass` 把面往后推一格深度单位（`depthBiasConstantFactor`），单位是深度缓冲自己的最小可分辨量，所以一米的零件和一毫米的零件都合适。反过来给边一个固定的 NDC 偏移的话，在小零件上背面的边会从正面透出来。
 
@@ -398,7 +400,7 @@ M3 的落地细节：
 - **像素容差换成世界容差写成 `base + slope * t`。** 正交下 `slope = 0`，透视下 `base = 0`，窄阶段因此不必知道自己在哪种投影里。`IScene::Raycast` 没有相机可问，用的是场景包围盒对角线的一个比例。
 - **没选中不是错误**，不写错误槽——鼠标划过空白是最常见的情况。
 - 承载平面（圆/圆弧/矩形）会作为命中法线返回，所以 `SetWorkPlaneFromPick` 在 M4 的实体做出来之前就能用：点一个圆，就能在它的平面上继续画。
-- **垂足吸附（`Snap_Perpendicular`）没有做**：垂足是相对「上一个点」说的，而 `IToolContext::SnapAt` 的签名已经冻结，没有地方传那个参考点。它随 M6 的吸附面板用扩展接口补上。
+- ~~**垂足吸附（`Snap_Perpendicular`）没有做**~~（M6 补上了）：垂足是相对「上一个点」说的，而 `IToolContext::SnapAt` 的签名已经冻结，没有地方传那个参考点。M6 的解法见下面的落地细节 —— 比「加一个参数」简单。
 
 ### 6.4 相机
 
@@ -467,6 +469,92 @@ M5 的落地细节：
 
 ---
 
+## 7.1 打磨（M6）的落地细节
+
+M6 补的是「能拿来干活」和「能跑起来」之间的差距：那些一个人真拿它画图时，第一个小时里
+就会撞上的东西。
+
+- **新能力从扩展槽进来，不往冻结的接口上加虚函数。** `include/cadgeom/IEngineExt.h` 里的
+  `ICadEngine2` 由 `ICadEngine::GetExtension(ExtensionId_Engine2)` 交出去（§2.2 第 3 条
+  留的那个口子）。单位系统、吸附参考点、状态栏文本、HUD 开关、实际采样数、测量结果 ——
+  六件事分别属于引擎、工具和视口，往三个已发布的接口上各挂一批虚函数是在给自己埋雷。
+  它是引擎的一个成员，宿主拿到的是借来的指针，**没有 `Release`**：那正是扩展对象和普通
+  接口对象的区别。不认识的 id 返回 null，宿主据此降级而不是崩。
+
+- **垂足吸附的参考点变成了引擎状态，而不是一个新参数。** M3 卡住的地方是
+  `IToolContext::SnapAt(x, y, out)` 已经冻结，传不进「上一个点」。加 `SnapAt2` 是一条路，
+  但那意味着每个工具都要判断自己能不能用新版本。真正的答案是：**参考点根本不属于那次调用**，
+  它属于「当前正在画的这一笔」，所以它住在 `interact::ToolSettings` 里 ——
+  内置工具落下第一个点时设它，宿主写的工具用 `ICadEngine2::SetSnapReference` 设，
+  而 `SnapAt` 的签名一个字都没动。垂足因此对内置工具和宿主工具同时生效。
+  几何那一半在 `geom::CollectPerpendicularPoints`：垂足夹在曲线的实际范围内（线段夹在两端
+  之间、圆弧夹在扫描角之内，落在端点上的不算 —— 那是端点吸附的活儿），因为延长线上的垂足
+  在图纸上不存在。
+
+- **屏幕上的字是笔画字体，走 `LinePass`，没有字形图集。** `IOverlayBuilder::AddText`
+  从 M2 起就是空的，因为「画字」听起来意味着一张纹理、一个采样器、一条带纹理的管线和一套
+  描述符 —— 为了状态栏上的一行提示。但线段撑成屏幕空间四边形这件事引擎早就做完了，而
+  **笔画字体正好是一堆线段**（`interact/TextStroke.cpp`，4×6 的格子，ASCII，小写按大写画）。
+  这也不是将就：CAD 图纸上的字历来是笔画字体（AutoCAD 的 `txt.shx` 就是），放多大都不糊，
+  而且和图线用同一支笔。代价是只有 ASCII —— 所以 HUD 上的字是英文的，而注释是中文的。
+
+- **HUD 是引擎自己画的，ImGui 没有进来。** §0.1 说 UI 只在 examples 里用、核心库保持无 UI
+  依赖；而 `examples/glfw_viewer` 从 M0 起就只链接 `cadgeom` 一个库，连 GLFW 都不链
+  —— 窗口归引擎（`SurfaceKind::Glfw`），宿主拿不到 `GLFWwindow*`，也拿不到
+  `VkDevice`，ImGui 的两个后端都没有立足之地。硬要给 ImGui 让路，就得在公共接口上开一个
+  「收下这批二维顶点」的口子，那是发明一套 UI 协议。所以 M6 走的是另一条：引擎用上面那套
+  笔画字体在左下角画状态行和一行摘要（工具名、显示模式、投影、网格间距、MSAA），
+  `H` 键开关。宿主要做真正的面板 —— Qt 的、MFC 的、ImGui 的 —— 需要的东西一件不少地在
+  `ICadEngine2` 上：`GetStatusText()` 给提示文本，`GetMeasurement()` 给读数，
+  `GetUnitSettings()` / `FormatLength()` 给格式化，然后把 `SetHudVisible(false)` 关掉自绘那份。
+
+- **单位系统只管显示，一个顶点都不碰。** 引擎内部只有一种长度：模型单位。`UnitSettings`
+  里的 `modelUnit` 说「模型里的 1.0 是多长」，`displayUnit` 说「读出来用什么」，两者互不
+  相干。换显示单位不推进 `revision`，因此不会让整个场景重传一遍显存 —— 这和「params 是
+  SSOT、mesh 是派生缓存」是同一条纪律的延伸：**读数也是派生的**。英制走国际英寸
+  （1 in = 25.4 mm 整），来回换算分毫不差。
+
+- **MSAA 是「一条管线一个采样数」，所以 pass 按采样数分套。** dynamic rendering 下管线绑的
+  是附件的*格式*和*采样数*，而 M6 允许每个视口各要一个 `sampleCount`。于是
+  `render::RenderSystem` 持有一张「采样数 → `PassSet`」的表，按需建：两个同采样数的视口共用
+  一套，从不开 MSAA 的宿主永远只有一套。帧里画进多采样附件，结束时 `VK_RESOLVE_MODE_AVERAGE_BIT`
+  resolve 到原来那张单采样的半浮点图上 —— **resolve 之后的每一步（blit 到 swapchain、截图
+  读回）因此一个字都不用改**，这正是 M1 就把离屏合成做进去换来的那笔钱。设备支持不到宿主要的
+  档位时向下取（8x 要不到就给 4x，而不是给 1x），降了记一条日志，宿主也能从
+  `ICadEngine2::GetSampleCount()` 问回来。
+
+- **隐藏线是两遍深度，不是一遍。** `RenderMode::HiddenLine`：第一遍让 `MeshPass` 用一条
+  `colorWriteMask = 0` 的管线把实体的深度铺出来（**看不见但挡得住**），第二遍把边和曲线的
+  深度判据翻成 `VK_COMPARE_OP_GREATER` —— 深度测试*没通过*的片元恰好就是被遮挡的那些，
+  它们画成虚线；第三遍照常画可见的边。表面的 depth bias 一直留着，所以贴在面上的边不会被
+  自己所在的那个面判成「被遮挡」。出来的图和一张工程图纸是同一回事：全是线，而背面那些线
+  你看得见、也知道它们在背面。
+
+- **多视口本来就成立，M6 只是把它跑起来了。** 设备、管线、`GpuScene` 都在
+  `RenderSystem` 里按引擎共享，视口只额外持有一个 swapchain、一组帧资源和一台相机，所以
+  「第二个视口的成本是一个 swapchain」这句话从 M1 起就是真的。要补的是使用一侧：一次
+  `Tick()` 之后每个视口各画一帧（脏几何只解析一次、只上传一次），以及 demo 里那个
+  `--viewports 2` —— 第二个窗口是正视图加隐藏线，和第一个的轴测着色图同时在屏幕上，
+  共享的只有几何。
+
+- **`ZoomToFit` 有选择集就框选择集。** `F` 键和中键双击都走 `FitView()`：选中了东西就框它，
+  没选中才框整个场景。「按 F 看看这个」问的是选中的那个东西，不是整张图。
+
+- **Scale 绕世界轴缩放，不装作能处理所有情况。** Gizmo 多了一个 `GizmoMode::Scale`：三根轴
+  手柄按「现在的参数 / 按下时的参数」求倍率，原点上的等比手柄按屏幕距离之比求倍率（屏幕
+  距离在正交和透视下是同一件事，所以这一段不必知道自己在哪种投影里）。增量在世界空间里合成
+  再折回局部变换，和 Move/Rotate 走的是同一条路 —— 于是也继承了同一个限制：绕世界轴缩放
+  一个已经转过身的实体会产生错切，而 TRS 表示不了错切。那种情况下工具记一条日志并让实体
+  留在原地，而不是给一个看着合理其实是错的姿态。倍率有下限，拖过原点不会变成镜像。
+
+- **Measure 是唯一一个什么都不改的工具。** 不建几何、不推命令、不碰选择集 —— 所以它也是
+  叠加层文字第一个真正的用户（一个量不出数来的测量工具没有意义）。两个点都走吸附，而第一个
+  点落下之后会成为垂足参考点，「量这个角到那条边的垂直距离」因此是点两下的事。结果留在
+  `ToolSettings` 里，宿主从 `ICadEngine2::GetMeasurement()` 取；斜距画在图上，三个分量走
+  状态栏 —— 一条标注线上挤四个数就没人读得下去了。
+
+---
+
 ## 8. 构建系统
 
 ```
@@ -486,7 +574,7 @@ CMake ≥ 3.24（当前环境 3.26.3 ✓）
 | tinyobjloader | OBJ 导入 |
 | tinygltf | glTF 导入导出 |
 | Catch2 或 googletest | 单元测试 |
-| imgui | 仅 `glfw_viewer` 使用 |
+| imgui | **没有接进构建**：M6 的界面走引擎自绘的笔画字体 HUD，原因见 §7.1。子模块留着，宿主要在自己那边用它是宿主的事 |
 
 **外部依赖：Vulkan SDK 手动安装**（`find_package(Vulkan REQUIRED)` 取 loader、headers、`glslc`、验证层）。
 
@@ -521,7 +609,7 @@ install/
 | **M3 选择与操作** ✅ | BVH、Picker（点/边/面优先级）、Selection 高亮、Gizmo、吸附、CommandStack | 能选中、拖动、旋转，Ctrl+Z/Y 正常 |
 | **M4 拉伸成体** ✅ | Profile 三角化、Extrude + Topology、`EdgePass`、`ExtrudeTool` | 圆→圆柱、矩形→立方体，交互式拖拽高度，带轮廓黑边 |
 | **M5 数据 IO** ✅ | IoRegistry、OBJ 读写、glTF 读写、`extras` 参数化往返、`ShapeType::Mesh` | 导出再导入，参数化信息不丢；Blender 能正常打开 |
-| **M6 打磨** | 吸附、ImGui 面板、多视口、Zoom-to-fit、单位系统 | 可用性达到「能拿来干活」 |
+| **M6 打磨** ✅ | 垂足吸附、屏幕文字与 HUD、多视口、Zoom-to-fit、单位系统、MSAA、隐藏线、Scale/Measure | 可用性达到「能拿来干活」 |
 
 ---
 

@@ -4,31 +4,10 @@
 #include "core/Log.h"
 
 namespace cadgeom::api {
-namespace {
 
-/// @brief 还没做出来的内置工具，以及它属于哪个里程碑。
-struct PendingTool {
-    const char* name;
-    const char* milestone;
-};
-
-/// @return null 表示这个 id 压根不是内置的 —— 对宿主的 id 来说就是「你没注册过」。
-const PendingTool* PendingBuiltin(ToolId id) {
-    switch (id) {
-        case ToolId::Scale: {
-            static const PendingTool pending{"Scale", "M6, with the rest of the polish"};
-            return &pending;
-        }
-        case ToolId::Measure: {
-            static const PendingTool pending{"Measure", "M6, with the on-screen readout"};
-            return &pending;
-        }
-        default:
-            return nullptr;
-    }
-}
-
-} // namespace
+// M6 之前这里有一张「还没做出来的内置工具」表，Scale 和 Measure 在上面。两个都做
+// 完了，`ToolId` 里再没有引擎认得但给不出的 id —— 所以现在找不到的 id 只有一种
+// 解释：宿主没注册过它。
 
 ToolManagerImpl::ToolManagerImpl(EngineImpl& engine) : engine_(engine) {}
 
@@ -59,10 +38,6 @@ CgResult ToolManagerImpl::Activate(ToolId id) {
 
     ITool* tool = Find(id);
     if (!tool) {
-        if (const PendingTool* pending = PendingBuiltin(id)) {
-            return core::SetError(CgResult::NotImplemented, "the %s tool arrives in milestone %s",
-                                  pending->name, pending->milestone);
-        }
         return core::SetError(CgResult::NotFound, "no tool registered for id %d",
                               static_cast<int>(id));
     }

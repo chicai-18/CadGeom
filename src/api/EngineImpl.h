@@ -2,6 +2,7 @@
 
 #include <cadgeom/IEngine.h>
 
+#include "api/EngineExtImpl.h"
 #include "api/IoRegistryImpl.h"
 #include "api/SceneImpl.h"
 #include "api/SceneIo.h"
@@ -88,6 +89,10 @@ private:
     /// 桥的引用。反过来排的话，最后一批处理器会向一个已经没了的对象告别。
     SceneIoBridge ioBridge_;
     IoRegistryImpl io_;
+
+    /// GetExtension(ExtensionId_Engine2) 交出去的那个对象。是成员而不是堆上的东西：
+    /// 扩展槽返回的是借来的指针，宿主没有 Release 可调（§2.2 第 3 条）。
+    EngineExtImpl extension_;
 
     std::vector<IViewport*> viewports_;
 

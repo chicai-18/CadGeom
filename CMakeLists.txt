@@ -47,7 +47,10 @@ endif()
 #   external/VulkanMemoryAllocator M1 device memory
 #   external/tinyobjloader         M5 OBJ import
 #   external/tinygltf              M5 glTF import/export
-#   external/imgui                 M6 demo UI panels (never in the core library)
+#   external/imgui                 not wired in: M6's interface is the engine's own
+#                                  stroke-font HUD, and the demo links nothing but
+#                                  cadgeom, so it has no window or device to give an
+#                                  ImGui backend (docs/architecture.md §7.1)
 # ---------------------------------------------------------------------------
 
 function(cadgeom_require_submodule name)
@@ -115,6 +118,7 @@ set(CADGEOM_PUBLIC_HEADERS
     include/cadgeom/ICamera.h
     include/cadgeom/ICommandStack.h
     include/cadgeom/IEngine.h
+    include/cadgeom/IEngineExt.h
     include/cadgeom/IEntity.h
     include/cadgeom/IGeometryBuilder.h
     include/cadgeom/IImportExport.h
@@ -131,6 +135,7 @@ set(CADGEOM_SOURCES
     src/core/Log.cpp
     src/core/ObjectTracker.cpp
     src/core/Png.cpp
+    src/core/Units.cpp
     src/geom/Curve.cpp
     src/geom/Extrude.cpp
     src/geom/Intersect.cpp
@@ -150,14 +155,17 @@ set(CADGEOM_SOURCES
     src/interact/OverlayBuilder.cpp
     src/interact/Picker.cpp
     src/interact/Snap.cpp
+    src/interact/TextStroke.cpp
     src/interact/ToolContext.cpp
     src/interact/WorkPlane.cpp
     src/interact/tools/DrawTools.cpp
     src/interact/tools/ExtrudeTool.cpp
+    src/interact/tools/MeasureTool.cpp
     src/interact/tools/ToolBase.cpp
     src/interact/tools/TransformTools.cpp
     src/api/Commands.cpp
     src/api/CommandStackImpl.cpp
+    src/api/EngineExtImpl.cpp
     src/api/EngineImpl.cpp
     src/api/EntityImpl.cpp
     src/api/Exports.cpp

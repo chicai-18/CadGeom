@@ -2,8 +2,13 @@
 //
 // Composes into an off-screen half-float target and blits the result onto the
 // swapchain. That indirection costs one full-screen copy and buys three things:
-// correct sRGB output for free, a place to put MSAA and post-processing later,
+// correct sRGB output for free, somewhere for MSAA and post-processing to live,
 // and a headless mode that is the same code path minus the presentation.
+//
+// M6 cashed in the second one. With `ViewportDesc::sampleCount > 1` the frame is
+// rasterised into a multisampled colour/depth pair and resolved into the same
+// single-sample target the blit and the screenshot already read from, so nothing
+// downstream of the resolve had to change.
 #pragma once
 
 #include "render/FrameData.h"
@@ -48,6 +53,9 @@ public:
 
     void SetVsync(bool vsync);
 
+    /// @brief 这个视口实际用的采样数。宿主要的那个数可能被设备的能力压低过。
+    uint32_t SampleCount() const { return static_cast<uint32_t>(samples_); }
+
     /// Reads back the last frame and writes it as a PNG.
     CgResult SaveScreenshot(const char* utf8Path);
 
@@ -89,9 +97,17 @@ private:
     bool presents_{true};
     bool vsync_{true};
 
+    /// 单采样的合成目标。blit 和截图都读它；开了 MSAA 时它是 resolve 的落点，
+    /// 没开时就直接画在上面 —— 所以 resolve 之后的每一步都不必关心有没有 MSAA。
     vk::Image color_;
+    /// 多采样的颜色附件，只在 samples_ > 1 时存在。
+    vk::Image colorMs_;
     vk::Image depth_;
     VkExtent2D extent_{0, 0};
+
+    VkSampleCountFlagBits samples_{VK_SAMPLE_COUNT_1_BIT};
+    /// 这个采样数对应的那一套 pass，视口初始化时定下来，之后不变。
+    const PassSet* passes_{nullptr};
 
     VkDescriptorPool descriptorPool_{VK_NULL_HANDLE};
     std::vector<Frame> frames_;

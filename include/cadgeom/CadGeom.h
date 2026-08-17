@@ -36,6 +36,7 @@
 #include <cadgeom/ICamera.h>
 #include <cadgeom/ICommandStack.h>
 #include <cadgeom/IEngine.h>
+#include <cadgeom/IEngineExt.h>
 #include <cadgeom/IEntity.h>
 #include <cadgeom/IGeometryBuilder.h>
 #include <cadgeom/IImportExport.h>

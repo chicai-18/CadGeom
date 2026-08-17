@@ -113,8 +113,9 @@ public:
         if (gizmo_.IsDragging()) {
             Vec3d translation{};
             Quatd rotation{};
-            if (gizmo_.UpdateDrag(*camera, e.x, e.y, translation, rotation)) {
-                ApplyDelta(ctx, translation, rotation);
+            Vec3d scale{1.0, 1.0, 1.0};
+            if (gizmo_.UpdateDrag(*camera, e.x, e.y, translation, rotation, scale)) {
+                ApplyDelta(ctx, translation, rotation, scale);
             }
             return ToolResult::Handled;
         }
@@ -152,7 +153,7 @@ public:
     }
 
 protected:
-    TransformToolBase(const ToolSettings& settings, GizmoMode mode) : ToolBase(settings) {
+    TransformToolBase(ToolSettings& settings, GizmoMode mode) : ToolBase(settings) {
         gizmo_.SetMode(mode);
     }
     ~TransformToolBase() override = default;
@@ -256,21 +257,33 @@ private:
 
     /// 把累计增量应用到每个被捕获的实体上。增量在世界空间里合成，再折回局部 ——
     /// 带父节点的实体因此不必分情况讨论。
-    void ApplyDelta(IToolContext* ctx, const Vec3d& translation, const Quatd& rotation) {
+    void ApplyDelta(IToolContext* ctx, const Vec3d& translation, const Quatd& rotation,
+                    const Vec3d& scale) {
         IScene* scene = ctx ? ctx->GetScene() : nullptr;
         if (!scene) {
             return;
         }
 
-        Transform deltaXform{};
+        Mat4d delta = Mat4Identity();
         if (gizmo_.Mode() == GizmoMode::Rotate) {
+            Transform deltaXform{};
             deltaXform.rotation = rotation;
             // 绕 Gizmo 原点转，而不是绕世界原点。
             deltaXform.translation = dragOrigin_ - Rotate(rotation, dragOrigin_);
+            delta = ToMatrix(deltaXform);
+        } else if (gizmo_.Mode() == GizmoMode::Scale) {
+            // 过 Gizmo 原点的世界轴缩放：T(o) · S · T(-o)。列主序，m[c*4+r]。
+            delta.m[0] = scale.x;
+            delta.m[5] = scale.y;
+            delta.m[10] = scale.z;
+            delta.m[12] = dragOrigin_.x * (1.0 - scale.x);
+            delta.m[13] = dragOrigin_.y * (1.0 - scale.y);
+            delta.m[14] = dragOrigin_.z * (1.0 - scale.z);
         } else {
+            Transform deltaXform{};
             deltaXform.translation = translation;
+            delta = ToMatrix(deltaXform);
         }
-        const Mat4d delta = ToMatrix(deltaXform);
 
         for (const Captured& record : captured_) {
             IEntity* entity = scene->GetEntity(record.entity);
@@ -281,8 +294,9 @@ private:
             if (Decompose(record.parentInverse * delta * record.worldBefore, local)) {
                 entity->SetLocalTransform(local);
             } else {
-                // 镜像或错切的父链分解不出 TRS。宁可不动，也不给一个看起来合理
-                // 但其实是错的姿态。
+                // 镜像或错切的父链分解不出 TRS。缩放尤其容易撞上：绕世界轴缩放
+                // 一个转过身的实体，本来就会产生错切 —— TRS 表示不了它，硬凑一个
+                // 数出来只会让人以为工具坏了。宁可不动。
                 CG_WARN("transform: entity %llu sits under a transform that does not decompose; "
                         "it is left where it was",
                         static_cast<unsigned long long>(record.entity.value));
@@ -290,7 +304,8 @@ private:
         }
 
         if (gizmo_.Mode() == GizmoMode::Translate) {
-            // 平移时 Gizmo 跟着对象走；旋转时它待在转轴上不动。
+            // 平移时 Gizmo 跟着对象走；旋转和缩放都绕着 dragOrigin_ 发生，它待在
+            // 原地不动。
             gizmo_.SetOrigin(dragOrigin_ + translation);
         }
     }
@@ -332,7 +347,7 @@ private:
 
 class MoveTool final : public TransformToolBase {
 public:
-    explicit MoveTool(const ToolSettings& settings)
+    explicit MoveTool(ToolSettings& settings)
         : TransformToolBase(settings, GizmoMode::Translate) {}
 
     ToolId GetId() const override { return ToolId::Move; }
@@ -350,7 +365,7 @@ private:
 
 class RotateTool final : public TransformToolBase {
 public:
-    explicit RotateTool(const ToolSettings& settings)
+    explicit RotateTool(ToolSettings& settings)
         : TransformToolBase(settings, GizmoMode::Rotate) {}
 
     ToolId GetId() const override { return ToolId::Rotate; }
@@ -366,12 +381,31 @@ private:
     ~RotateTool() override = default;
 };
 
+class ScaleTool final : public TransformToolBase {
+public:
+    explicit ScaleTool(ToolSettings& settings) : TransformToolBase(settings, GizmoMode::Scale) {}
+
+    ToolId GetId() const override { return ToolId::Scale; }
+    const char* GetName() const override { return "Scale"; }
+
+protected:
+    const char* Prompt() const override {
+        return InProgress() ? "Drag to scale"
+                            : "Select an object, then drag an axis, or the centre for uniform";
+    }
+    const char* CommandLabel() const override { return "Scale"; }
+
+private:
+    ~ScaleTool() override = default;
+};
+
 } // namespace
 
-void RegisterTransformTools(IToolManager& manager, const ToolSettings& settings) {
+void RegisterTransformTools(IToolManager& manager, ToolSettings& settings) {
     manager.RegisterTool(new MoveTool(settings));
     manager.RegisterTool(new RotateTool(settings));
-    CG_DEBUG("registered 2 transform tools");
+    manager.RegisterTool(new ScaleTool(settings));
+    CG_DEBUG("registered 3 transform tools");
 }
 
 } // namespace cadgeom::interact

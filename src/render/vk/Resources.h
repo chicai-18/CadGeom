@@ -47,8 +47,11 @@ CgResult CreateBuffer(Context& ctx, VkDeviceSize size, VkBufferUsageFlags usage,
                       BufferDomain domain, Buffer& out);
 void DestroyBuffer(Context& ctx, Buffer& buffer);
 
+/// @param samples 多重采样数；VK_SAMPLE_COUNT_1_BIT 就是普通图像。多采样图像不能
+///                被 blit，只能作为附件用、再 resolve 到一张单采样的图上。
 CgResult CreateImage2D(Context& ctx, VkFormat format, VkExtent2D extent, VkImageUsageFlags usage,
-                       VkImageAspectFlags aspect, Image& out);
+                       VkImageAspectFlags aspect, Image& out,
+                       VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT);
 void DestroyImage(Context& ctx, Image& image);
 
 /// Uploads `bytes` into a device-local buffer through a staging copy.

@@ -16,6 +16,6 @@ struct ToolSettings;
 
 /// 创建并注册 Extrude 工具。manager 接管它的所有权；`settings` 必须活得比
 /// manager 久 —— 它本来就是 manager 自己的成员。
-void RegisterExtrudeTool(IToolManager& manager, const ToolSettings& settings);
+void RegisterExtrudeTool(IToolManager& manager, ToolSettings& settings);
 
 } // namespace cadgeom::interact

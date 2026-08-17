@@ -7,28 +7,32 @@ break by accident.
 
 ## Current state
 
-Milestone **M5 complete** (OBJ and glTF read/write, `extras` parametric
-round-trip, `ShapeType::Mesh`). See `docs/architecture.md` §9 for the plan.
+Milestone **M6 complete** — the last one in the plan. Perpendicular snapping,
+stroke-font overlay text and a self-drawn HUD, multi-viewport, fit-to-selection,
+a display unit system, MSAA, hidden-line mode, and the Scale and Measure tools.
+See `docs/architecture.md` §9 for the plan and §7.1 for what M6 actually landed.
 
 | | Status |
 |---|---|
 | Public headers (`include/cadgeom/`) | Complete — the contract is frozen from here |
 | Engine lifecycle, scene graph, selection, undo stack, IO registry | Working |
-| Vulkan context/swapchain/RHI, orbit camera, screenshots | Working |
+| Vulkan context/swapchain/RHI, orbit camera, screenshots, MSAA | Working |
 | `GridPass` `MeshPass` `EdgePass` `LinePass` `PointPass` + overlay previews | Working |
 | `ISurface`: GLFW, native Win32, headless | Working (X11/Wayland/Cocoa report `NotSupported`) |
 | `SimpleKernel`: point/line/circle/arc/rectangle/polyline, tessellation, bounds | Working |
-| WorkPlane, `IToolContext`, Select/Point/Line/Circle/Rectangle/Polyline tools | Working |
-| BVH, `Raycast`/`Pick`/`SetWorkPlaneFromPick`, selection highlight, Move/Rotate gizmos | Working |
-| Snapping | Working except `Snap_Perpendicular` — see below |
+| WorkPlane, `IToolContext`, every `ToolId` including Scale and Measure | Working |
+| BVH, `Raycast`/`Pick`/`SetWorkPlaneFromPick`, selection highlight, Move/Rotate/Scale gizmos | Working |
+| Snapping, `Snap_Perpendicular` included | Working |
 | `Extrude`, solid topology, per-face picking, `ExtrudeTool` | Working |
 | OBJ / glTF / GLB read + write, `extras` round-trip, `ShapeType::Mesh` | Working — `ExportOptions::embedTextures` is inert, nothing has textures yet |
-| MSAA, ImGui panels, overlay text, Scale/Measure tools | **M6** — `ViewportDesc::sampleCount` is ignored with a warning |
-| `RenderMode::HiddenLine` | **M6** — behaves as `ShadedWithEdges` for now |
+| All four `RenderMode`s, multi-viewport, `ICadEngine2` extension | Working |
+| Overlay text, status line, HUD | Working — a stroke font through `LinePass`, ASCII only |
 
-Anything not built yet fails with `CgResult::NotImplemented` and an error
-message naming the milestone. Keep that habit: a host wiring itself up against
-these headers should never have to guess whether it hit a bug or a gap.
+Every `ToolId` the engine knows now resolves to a tool, and nothing returns
+`CgResult::NotImplemented` any more except `CreateViewport` in a build made
+without the Vulkan SDK. Keep the habit anyway when adding something new: a host
+wiring itself up against these headers should never have to guess whether it hit
+a bug or a gap.
 
 ## The ABI rules — breaking one of these plants a landmine
 
@@ -74,8 +78,22 @@ Two consequences already bite:
   has no such limit: glTF's `extras` carries the point list, so a polyline
   survives a round trip intact even though the public getter cannot report it.
 - `IToolContext::SnapAt` takes a pixel and nothing else, so there is nowhere to
-  pass the reference point a perpendicular snap is measured *from*. Every other
-  `SnapType` works; `Snap_Perpendicular` waits for an extension interface in M6.
+  pass the reference point a perpendicular snap is measured *from*. M6 did not
+  add a parameter: **the reference point does not belong to that call**, it
+  belongs to the stroke being drawn, so it lives in `interact::ToolSettings` and
+  is set by whichever tool just placed a point (or by a host through
+  `ICadEngine2::SetSnapReference`). The frozen signature never moved, and
+  `Snap_Perpendicular` works for built-in and host-written tools alike.
+
+Growing the API past this point goes through the extension slot, not through the
+published vtables. `ICadEngine::GetExtension(ExtensionId_Engine2)` hands back
+`ICadEngine2` (`include/cadgeom/IEngineExt.h`) — display units, the snap
+reference, status text, the HUD toggle, the real sample count, the last
+measurement. It is an engine member, so it has **no `Release()`**: the host holds
+a borrowed pointer. An id the binary does not know returns null, which is how a
+host tells "old library" from "broken library". `ICadEngine2` itself is now
+published, so it is append-only too; a future round adds `ICadEngine3` under a
+new id.
 
 ## Layering
 
@@ -200,6 +218,41 @@ more bases on `SceneImpl` for the same reason as the rule above.
   widens on Windows, and both third-party readers are handed bytes rather than a
   filename for exactly that reason (`tinygltf`'s and `tinyobjloader`'s own file
   entry points take the active code page).
+- **Units are a display concern, never a geometric one.** Everything inside the
+  engine is model units; `UnitSettings` only decides how a number is *read*.
+  Changing the display unit must not bump the scene revision and must not touch a
+  vertex — it is the same one-way rule as params/mesh, applied to readouts.
+  `core/Units.h` owns the conversion table; imperial goes through the
+  international inch (1 in = 25.4 mm exactly).
+- **Overlay text is a stroke font through `LinePass`, not a glyph atlas.** A
+  screen-space quad expansion already exists, and a stroke font is line segments,
+  so text needed no new pipeline, texture or descriptor — and it is what CAD
+  drawings have always used. `interact/TextStroke.cpp` holds the glyphs: ASCII
+  only, lowercase drawn as uppercase, unknown characters drawn as nothing. That
+  is why HUD strings are English while the comments around them are Chinese.
+- **The HUD is drawn by the engine; real panels are the host's.** ImGui is not
+  linked anywhere (`docs/architecture.md` §7.1 explains why the demo cannot host
+  it). A host builds its own panel from `ICadEngine2::GetStatusText()`,
+  `GetMeasurement()` and `FormatLength()`, then turns the built-in HUD off with
+  `SetHudVisible(false)`.
+- **A pipeline is tied to its sample count**, so `render::RenderSystem` keeps one
+  `PassSet` per sample count and builds them on demand. MSAA renders into a
+  multisampled attachment and resolves into the same single-sample half-float
+  target that was always there, so the blit and the screenshot path are unchanged.
+  A requested count the device cannot do is rounded *down*, with a warning;
+  `ICadEngine2::GetSampleCount()` reports what was actually used.
+- **`RenderMode::HiddenLine` is two depth passes.** `MeshPass` draws with
+  `colorWriteMask = 0` (invisible but still occluding), then edges and curves are
+  drawn a second time with `VK_COMPARE_OP_GREATER` — the fragments that *fail*
+  the depth test are exactly the occluded ones — as `LineStyle::Hidden`, before
+  the visible pass. The surface depth bias stays on, so an edge lying on its own
+  face is not mistaken for a hidden one.
+- **Scale is about world axes, and says so when it cannot deliver.** The Scale
+  gizmo composes its delta in world space and folds it back into the local
+  transform, exactly like Move and Rotate — which means scaling a rotated entity
+  along a world axis produces shear, and TRS cannot express shear. `Decompose`
+  fails, the tool logs it and leaves the entity alone rather than inventing a
+  plausible-looking wrong pose.
 - Angles are radians unless the name says `Deg`.
 - Every impl object embeds a `core::ObjectTracker`; `CadGeom_GetLiveObjectCount()`
   must return to its baseline after teardown. The tests and the demo both assert
@@ -248,6 +301,12 @@ build/bin/Debug/glfw_viewer.exe --headless --screenshot shot.png
 build/bin/Debug/glfw_viewer.exe --headless --perspective --screenshot iso.png
 build/bin/Debug/glfw_viewer.exe --perspective --frames 300
 
+# M6, all headless-checkable: hidden-line mode, a chosen MSAA level, and a second
+# viewport (front elevation + hidden line) that writes shot_vp2.png beside shot.png.
+build/bin/Debug/glfw_viewer.exe --headless --hidden-line --screenshot hidden.png
+build/bin/Debug/glfw_viewer.exe --headless --samples 8 --screenshot msaa.png
+build/bin/Debug/glfw_viewer.exe --headless --viewports 2 --screenshot shot.png
+
 # The file round trip, on the command line: write what the demo drew, then look
 # at it again. --import replaces the built-in drawing (and the tool drive with
 # it, since that one knows its entities by index).
@@ -258,10 +317,14 @@ build/bin/Debug/glfw_viewer.exe --import part.glb
 Targets: `cadgeom` (the only shipped artifact), `cadgeom_tests`, `glfw_viewer`.
 
 In the window, `V X L C R Y` pick the Select/Point/Line/Circle/Rectangle/
-Polyline tools, `E` picks Extrude, `M` and `T` pick Move and Rotate (`R` was
-taken; `T` for turn), Esc cancels, and Ctrl+Z / Ctrl+Y undo and redo. Those
-bindings live in `ViewportImpl` rather than in the demo because with
-`SurfaceKind::Glfw` the *engine* owns the window, so the host never sees the key.
+Polyline tools, `E` picks Extrude, `M` `T` `S` pick Move, Rotate and Scale (`R`
+was taken, so `T` for turn), `D` picks Measure (`M` was taken, so `D` for
+dimension), Esc cancels, and Ctrl+Z / Ctrl+Y undo and redo. `F` fits the
+selection when there is one and the whole scene otherwise, `W` cycles the four
+render modes, `H` toggles the HUD, `G` the grid, `P` the projection, `1`–`7` the
+standard views. Those bindings live in `ViewportImpl` rather than in the demo
+because with `SurfaceKind::Glfw` the *engine* owns the window, so the host never
+sees the key.
 
 Extruding needs a view that is not looking down the sweep axis: the height comes
 from projecting the mouse ray onto that axis, and in Top view a Z extrusion has

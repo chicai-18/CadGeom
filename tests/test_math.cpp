@@ -331,3 +331,68 @@ TEST_CASE("double precision survives CAD-scale coordinates", "[math]") {
     const float nudgedF = farF + 0.001f;
     CHECK(nudgedF == farF);
 }
+
+// ---------------------------------------------------------------------------
+// 垂足 —— M6 的 Snap_Perpendicular 靠的就是这两个函数
+// ---------------------------------------------------------------------------
+
+TEST_CASE("the foot of a perpendicular onto a segment", "[math][snap]") {
+    const Vec3d a{0.0, 0.0, 0.0};
+    const Vec3d b{10.0, 0.0, 0.0};
+
+    SECTION("a point above the middle drops straight down") {
+        const Vec3d foot = ClosestPointOnSegment(a, b, Vec3d{4.0, 7.0, 0.0});
+        CHECK(foot.x == Approx(4.0));
+        CHECK(foot.y == Approx(0.0));
+        // 垂足的定义：连线与线段正交。
+        CHECK(Dot(Vec3d{4.0, 7.0, 0.0} - foot, b - a) == Approx(0.0).margin(1e-12));
+    }
+
+    SECTION("beyond the end it clamps to the end") {
+        // 延长线上的垂足在图纸上不存在，吸到那儿只会让人莫名其妙。
+        CHECK(ClosestPointOnSegment(a, b, Vec3d{25.0, 3.0, 0.0}).x == Approx(10.0));
+        CHECK(ClosestPointOnSegment(a, b, Vec3d{-4.0, 3.0, 0.0}).x == Approx(0.0));
+    }
+
+    SECTION("without the clamp it lands on the infinite line") {
+        CHECK(ClosestPointOnSegment(a, b, Vec3d{25.0, 3.0, 0.0}, false).x == Approx(25.0));
+    }
+
+    SECTION("a degenerate segment answers with its own point") {
+        CHECK(ClosestPointOnSegment(a, a, Vec3d{5.0, 5.0, 5.0}).x == Approx(0.0));
+    }
+}
+
+TEST_CASE("the foot of a perpendicular onto a circle", "[math][snap]") {
+    const Vec3d centre{0.0, 0.0, 0.0};
+    const Vec3d normal{0.0, 0.0, 1.0};
+    const double radius = 5.0;
+
+    SECTION("outside the circle, on the ray from the centre") {
+        const Vec3d foot = ClosestPointOnCircle(centre, normal, radius, Vec3d{20.0, 0.0, 3.0});
+        CHECK(foot.x == Approx(5.0));
+        CHECK(foot.y == Approx(0.0));
+        // 圆的垂足永远在圆上 —— 它是圆上离参考点最近的那个点。
+        CHECK(Distance(foot, centre) == Approx(radius));
+        CHECK(foot.z == Approx(0.0));  // 先投到圆所在的平面上。
+    }
+
+    SECTION("inside the circle it still lands on the circle") {
+        const Vec3d foot = ClosestPointOnCircle(centre, normal, radius, Vec3d{0.0, 1.0, 0.0});
+        CHECK(foot.y == Approx(5.0));
+        CHECK(Distance(foot, centre) == Approx(radius));
+    }
+
+    SECTION("on the axis every direction is equally near, so uAxis decides") {
+        // 退化情况得有一个确定的答案，否则光标抖一下结果就换一个。
+        const Vec3d foot = ClosestPointOnCircle(centre, normal, radius, Vec3d{0.0, 0.0, 9.0},
+                                                Vec3d{0.0, 1.0, 0.0});
+        CHECK(foot.y == Approx(5.0));
+        CHECK(Distance(foot, centre) == Approx(radius));
+    }
+
+    SECTION("a non-positive radius has no circle to land on") {
+        CHECK(Distance(ClosestPointOnCircle(centre, normal, 0.0, Vec3d{1.0, 1.0, 1.0}), centre) ==
+              Approx(0.0));
+    }
+}

@@ -1,5 +1,7 @@
 #include "render/RenderSystem.h"
 
+#include "core/Error.h"
+#include "core/Log.h"
 #include "render/FrameData.h"
 
 namespace cadgeom::render {
@@ -28,32 +30,58 @@ CgResult RenderSystem::Initialize(const char* applicationName, bool enableValida
         Shutdown();
         return r;
     }
-    r = grid_.Initialize(context_, pipelineLayout_);
-    if (CgFailed(r)) {
+    // 单采样那一套现在就建出来：每一个视口都用得上它，而在这里失败比在第一帧
+    // 里失败好解释得多。
+    if (!PassesFor(VK_SAMPLE_COUNT_1_BIT)) {
         Shutdown();
-        return r;
-    }
-    r = mesh_.Initialize(context_, pipelineLayout_);
-    if (CgFailed(r)) {
-        Shutdown();
-        return r;
-    }
-    r = edges_.Initialize(context_, pipelineLayout_);
-    if (CgFailed(r)) {
-        Shutdown();
-        return r;
-    }
-    r = lines_.Initialize(context_, pipelineLayout_);
-    if (CgFailed(r)) {
-        Shutdown();
-        return r;
-    }
-    r = points_.Initialize(context_, pipelineLayout_);
-    if (CgFailed(r)) {
-        Shutdown();
-        return r;
+        return core::LastError();
     }
     return CgResult::Ok;
+}
+
+const PassSet* RenderSystem::PassesFor(VkSampleCountFlagBits samples) {
+    if (samples == 0) {
+        samples = VK_SAMPLE_COUNT_1_BIT;
+    }
+    for (const std::unique_ptr<PassSet>& set : passSets_) {
+        if (set->samples == samples) {
+            return set.get();
+        }
+    }
+    if (!IsValid()) {
+        core::SetError(CgResult::InvalidState, "PassesFor() before the device exists");
+        return nullptr;
+    }
+
+    auto set = std::make_unique<PassSet>();
+    set->samples = samples;
+
+    CgResult r = set->grid.Initialize(context_, pipelineLayout_, samples);
+    if (CgSucceeded(r)) {
+        r = set->mesh.Initialize(context_, pipelineLayout_, samples);
+    }
+    if (CgSucceeded(r)) {
+        r = set->edges.Initialize(context_, pipelineLayout_, samples);
+    }
+    if (CgSucceeded(r)) {
+        r = set->lines.Initialize(context_, pipelineLayout_, samples);
+    }
+    if (CgSucceeded(r)) {
+        r = set->points.Initialize(context_, pipelineLayout_, samples);
+    }
+    if (CgFailed(r)) {
+        // 半套 pass 没有任何用处，而 Shutdown 对没建成的管线是安全的。
+        set->points.Shutdown(context_);
+        set->lines.Shutdown(context_);
+        set->edges.Shutdown(context_);
+        set->mesh.Shutdown(context_);
+        set->grid.Shutdown(context_);
+        return nullptr;
+    }
+
+    CG_DEBUG("built the pass set for %ux MSAA", static_cast<unsigned>(samples));
+    passSets_.push_back(std::move(set));
+    return passSets_.back().get();
 }
 
 CgResult RenderSystem::CreateLayouts() {
@@ -110,11 +138,14 @@ void RenderSystem::Shutdown() {
     deletions_.FlushAll();
 
     geometry_.Destroy(context_);
-    points_.Shutdown(context_);
-    lines_.Shutdown(context_);
-    edges_.Shutdown(context_);
-    mesh_.Shutdown(context_);
-    grid_.Shutdown(context_);
+    for (const std::unique_ptr<PassSet>& set : passSets_) {
+        set->points.Shutdown(context_);
+        set->lines.Shutdown(context_);
+        set->edges.Shutdown(context_);
+        set->mesh.Shutdown(context_);
+        set->grid.Shutdown(context_);
+    }
+    passSets_.clear();
 
     if (pipelineLayout_ != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(context_.Device(), pipelineLayout_, nullptr);

@@ -6,16 +6,20 @@ standalone.
 
 Design document: [`docs/architecture.md`](docs/architecture.md).
 
-> **Status: milestone M5 (file IO).** The public API is complete and frozen.
-> Working: the Vulkan renderer, the geometry kernel,
-> points/lines/arcs/circles/rectangles/polylines, screen-space line rendering with
-> dash patterns, the work plane, the interactive tools, ray picking through a BVH
-> with vertex/edge/face priority, geometry snapping, selection highlighting,
-> translate/rotate gizmos, undo/redo, extrusion into solids with topology,
-> per-face picking and feature-edge rendering, and OBJ/glTF/GLB read and write
-> that keeps the parametric definitions across a round trip. Not built yet: MSAA
-> and UI panels (M6). Calls into those return `CgResult::NotImplemented` with a
-> message naming the milestone that brings them.
+> **Status: milestone M6 — feature complete against the design.** The public API
+> is complete and frozen. Working: the Vulkan renderer with MSAA, the geometry
+> kernel, points/lines/arcs/circles/rectangles/polylines, screen-space line
+> rendering with dash patterns, the work plane, every interactive tool
+> (draw, extrude, move, rotate, scale, measure), ray picking through a BVH with
+> vertex/edge/face priority, snapping including perpendicular, selection
+> highlighting, gizmos, undo/redo, extrusion into solids with topology, per-face
+> picking, feature-edge rendering, shaded/wireframe/hidden-line display, several
+> viewports on one device, a display unit system, on-screen text and a status
+> HUD, and OBJ/glTF/GLB read and write that keeps the parametric definitions
+> across a round trip.
+>
+> The only interface that still reports `CgResult::NotImplemented` is
+> `CreateViewport` in a build configured without the Vulkan SDK.
 
 ## Building
 
@@ -42,6 +46,12 @@ git submodule.
 # No display, or checking a render change without eyeballing a window:
 ./build/bin/Debug/glfw_viewer.exe --headless --screenshot shot.png
 ./build/bin/Debug/glfw_viewer.exe --headless --perspective --screenshot iso.png
+
+# Hidden-line output, a chosen MSAA level, and a second viewport (front elevation
+# in hidden line) that writes shot_vp2.png beside shot.png:
+./build/bin/Debug/glfw_viewer.exe --headless --hidden-line --screenshot hidden.png
+./build/bin/Debug/glfw_viewer.exe --headless --samples 8 --screenshot msaa.png
+./build/bin/Debug/glfw_viewer.exe --viewports 2
 
 # Write what the demo drew, then open it again:
 ./build/bin/Debug/glfw_viewer.exe --headless --export part.glb --frames 1
@@ -128,6 +138,15 @@ Dependencies point down only: `api/ → interact/ → scene · io · render → 
 - **glTF is effectively the native format.** The parametric definitions ride in
   each node's `extras`, so our own round trip keeps a circle editable as a circle;
   Blender and friends ignore the extra keys and see a plain mesh.
+- **Overlay text is a stroke font, not a glyph atlas.** The engine already
+  expands line segments into screen-space quads, and a stroke font *is* line
+  segments — so the status line and the measurement readout cost no new pipeline,
+  texture or descriptor. It is also what CAD drawings have used for decades.
+- **The engine draws a small HUD; real UI panels stay with the host.** No UI
+  library is linked into the library. Everything a Qt/MFC/ImGui panel needs — the
+  tool prompt, the last measurement, unit formatting — comes from `ICadEngine2`,
+  reached through the extension slot.
 - The interface obeys a strict ABI discipline (no STL across the boundary, no
   exceptions, append-only vtables) documented in `docs/architecture.md` §2.2 and
-  summarised in `CLAUDE.md`.
+  summarised in `CLAUDE.md`. Post-freeze capabilities arrive through
+  `ICadEngine::GetExtension()` rather than by touching a published vtable.

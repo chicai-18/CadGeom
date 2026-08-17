@@ -17,7 +17,8 @@ const VkVertexInputAttributeDescription kAttributes[2] = {
 
 } // namespace
 
-CgResult MeshPass::Initialize(vk::Context& ctx, VkPipelineLayout layout) {
+CgResult MeshPass::Initialize(vk::Context& ctx, VkPipelineLayout layout,
+                              VkSampleCountFlagBits samples) {
     VkShaderModule vertex = VK_NULL_HANDLE;
     VkShaderModule fragment = VK_NULL_HANDLE;
 
@@ -45,9 +46,16 @@ CgResult MeshPass::Initialize(vk::Context& ctx, VkPipelineLayout layout) {
         // 的单位是深度缓冲自己的最小可分辨量，一个一米的零件和一个一毫米的零件
         // 因此都合适，而固定偏移量在小零件上会让背面的边从正面透出来。
         .SetDepthBias(1.0f, 1.5f)
+        .SetSampleCount(samples)
         .SetFormats(kColorFormat, kDepthFormat);
 
     r = builder.Build(ctx, layout, fill_);
+    if (CgSucceeded(r)) {
+        // 隐藏线模式的第一遍：深度照写，颜色不写。深度偏移一并留着 —— 边依旧贴在
+        // 这些面上，需要被推开的那一格和着色模式下是同一格。
+        builder.SetColorWrite(false);
+        r = builder.Build(ctx, layout, depthOnly_);
+    }
 
     vkDestroyShaderModule(ctx.Device(), vertex, nullptr);
     vkDestroyShaderModule(ctx.Device(), fragment, nullptr);
@@ -59,15 +67,20 @@ void MeshPass::Shutdown(vk::Context& ctx) {
         vkDestroyPipeline(ctx.Device(), fill_, nullptr);
         fill_ = VK_NULL_HANDLE;
     }
+    if (depthOnly_ != VK_NULL_HANDLE) {
+        vkDestroyPipeline(ctx.Device(), depthOnly_, nullptr);
+        depthOnly_ = VK_NULL_HANDLE;
+    }
 }
 
 void MeshPass::Record(VkCommandBuffer cmd, VkPipelineLayout layout, const GpuScene& gpuScene,
                       const SceneSnapshot& snapshot, const RenderView& view) const {
-    if (fill_ == VK_NULL_HANDLE || !gpuScene.HasGeometry() || snapshot.items.empty()) {
+    const VkPipeline pipeline = view.depthOnlySurfaces ? depthOnly_ : fill_;
+    if (pipeline == VK_NULL_HANDLE || !gpuScene.HasGeometry() || snapshot.items.empty()) {
         return;
     }
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, fill_);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
     const VkDeviceSize offset = 0;
     VkBuffer vertexBuffer = gpuScene.VertexBuffer();

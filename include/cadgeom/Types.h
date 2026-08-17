@@ -245,7 +245,10 @@ struct ViewportDesc {
     Color background{0.16f, 0.17f, 0.19f, 1.0f};
     bool showGrid{true};
     bool vsync{true};
-    uint32_t sampleCount{1};  ///< MSAA samples; 0 or 1 = off.
+    /// MSAA samples; 0 or 1 = off. Rounded *down* to what the device supports
+    /// (ask for 8 on a 4x device and you get 4), so read the result back from
+    /// ICadEngine2::GetSampleCount() if it matters.
+    uint32_t sampleCount{1};
 };
 
 // ---------------------------------------------------------------------------
@@ -368,6 +371,60 @@ struct SnapResult {
     SnapType type;
     Vec3d point;
     EntityId entity;
+};
+
+// ---------------------------------------------------------------------------
+// 单位系统（M6）
+//
+// 引擎内部只认「模型单位」这一种长度 —— 几何、包围盒、容差、文件里的坐标，全是
+// 它。单位系统管的是**显示**：把那个数换算成人读的数字和后缀。换个显示单位不会
+// 动任何一个顶点。
+// ---------------------------------------------------------------------------
+
+/// @brief 长度单位。`modelUnit` 说的是「模型里的 1.0 是多长」，`displayUnit`
+///        说的是「读出来用什么」，两者互不相干。
+enum class LengthUnit : int32_t {
+    Millimetre = 0,
+    Centimetre,
+    Metre,
+    Kilometre,
+    Inch,
+    Foot,
+    Yard,
+    Mile,
+};
+
+enum class AngleUnit : int32_t {
+    Degrees = 0,
+    Radians,
+};
+
+/// @brief 一个引擎的显示单位设置。
+/// @note `modelUnit` 是 CAD 里那件必须说清楚的事：同一个 `1.0`，在毫米图纸上
+///       是一毫米，在米制场景里是一米。导入导出的缩放、测量读数和 HUD 上的网格
+///       间距都从它出发。
+struct UnitSettings {
+    LengthUnit modelUnit{LengthUnit::Millimetre};
+    LengthUnit displayUnit{LengthUnit::Millimetre};
+    AngleUnit angleUnit{AngleUnit::Degrees};
+    /// 小数位数，负数按 0 处理。
+    int32_t linearPrecision{2};
+    int32_t angularPrecision{1};
+    /// 格式化结果带不带 " mm" 这样的后缀。
+    bool showUnitSuffix{true};
+};
+
+// ---------------------------------------------------------------------------
+// 扩展接口（§2.2 第 3 条）
+//
+// 已发布接口的 vtable 是冻结的，新能力因此走 ICadEngine::GetExtension()：给一个
+// id，拿一个独立接口。宿主拿到 null 就是「这个版本的库没有这件东西」，而不是崩。
+// ---------------------------------------------------------------------------
+
+enum ExtensionId : uint32_t {
+    ExtensionId_None = 0u,
+    /// ICadEngine2 —— M6 的单位系统、吸附参考点与视口附加查询。
+    ExtensionId_Engine2 = 1u,
 };
 
 // ---------------------------------------------------------------------------

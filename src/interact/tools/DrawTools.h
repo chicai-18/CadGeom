@@ -26,6 +26,6 @@ struct ToolSettings;
 /// Creates and registers Select, Point, Line, Circle, Rectangle and Polyline.
 /// The manager takes ownership of each. `settings` must outlive the manager —
 /// it is the manager's own member.
-void RegisterBuiltinTools(IToolManager& manager, const ToolSettings& settings);
+void RegisterBuiltinTools(IToolManager& manager, ToolSettings& settings);
 
 } // namespace cadgeom::interact

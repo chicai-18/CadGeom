@@ -52,6 +52,18 @@ CgResult Renderer::Initialize(RenderSystem& system, Surface& surface, const View
 
     vk::Context& ctx = system.Context();
 
+    // 设备说了算。宿主要 8x 而这块卡只到 4x 就给 4x；一个字都不说地降级是不对的，
+    // 所以降了会记一条日志，宿主也可以从 ICadEngine2::GetSampleCount 问回来。
+    samples_ = ctx.ClampSampleCount(desc.sampleCount);
+    if (desc.sampleCount > 1 && static_cast<uint32_t>(samples_) < desc.sampleCount) {
+        CG_WARN("%s supports at most %ux MSAA; ViewportDesc::sampleCount %u was lowered to it",
+                ctx.DeviceName(), static_cast<unsigned>(samples_), desc.sampleCount);
+    }
+    passes_ = system.PassesFor(samples_);
+    if (!passes_) {
+        return core::LastError();
+    }
+
     if (presents_) {
         CgResult r = surface.CreateVkSurface(ctx.Instance(), vkSurface_);
         if (CgFailed(r)) {
@@ -240,14 +252,27 @@ CgResult Renderer::RecreateTargets() {
     if (CgFailed(r)) {
         return r;
     }
+    // 深度跟着光栅化走，所以它是多采样的；而它从来没人读，也就不需要 resolve。
     r = vk::CreateImage2D(ctx, kDepthFormat, extent_,
                           VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_IMAGE_ASPECT_DEPTH_BIT,
-                          depth_);
+                          depth_, samples_);
     if (CgFailed(r)) {
         return r;
     }
+    if (samples_ != VK_SAMPLE_COUNT_1_BIT) {
+        // 多采样的颜色附件。TRANSIENT 是给驱动的一句实话：它的内容除了被 resolve
+        // 之外没人要，tile 架构上因此可以完全不进显存。
+        r = vk::CreateImage2D(ctx, kColorFormat, extent_,
+                              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                  VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT,
+                              VK_IMAGE_ASPECT_COLOR_BIT, colorMs_, samples_);
+        if (CgFailed(r)) {
+            return r;
+        }
+    }
 
-    CG_DEBUG("render targets %ux%u", extent_.width, extent_.height);
+    CG_DEBUG("render targets %ux%u, %ux MSAA", extent_.width, extent_.height,
+             static_cast<unsigned>(samples_));
     return CgResult::Ok;
 }
 
@@ -265,6 +290,7 @@ void Renderer::DestroyTargets() {
     presentSemaphores_.clear();
 
     vk::DestroyImage(ctx, color_);
+    vk::DestroyImage(ctx, colorMs_);
     vk::DestroyImage(ctx, depth_);
     swapchain_.Destroy(ctx);
     extent_ = {0, 0};
@@ -363,17 +389,30 @@ CgResult Renderer::PrepareOverlay(Frame& frame, const RenderView& view,
 void Renderer::RecordFrame(VkCommandBuffer cmd, const RenderView& view,
                            const SceneSnapshot& snapshot, const Frame& frame,
                            VkImage presentImage) {
+    const bool multisampled = samples_ != VK_SAMPLE_COUNT_1_BIT && colorMs_.IsValid();
+
     // UNDEFINED as the old layout on purpose: the previous contents are being
     // cleared anyway, and asking the driver to preserve them would be a lie.
     vk::TransitionImage(cmd, color_.handle, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    if (multisampled) {
+        vk::TransitionImage(cmd, colorMs_.handle, VK_IMAGE_ASPECT_COLOR_BIT,
+                            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    }
     vk::TransitionImage(cmd, depth_.handle, VK_IMAGE_ASPECT_DEPTH_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
                         VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL);
 
     VkRenderingAttachmentInfo colorAttachment{};
     colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    colorAttachment.imageView = color_.view;
+    // 开了 MSAA 就画进多采样附件，结束时由 resolve 落到 color_ 上；没开就直接画在
+    // color_ 上。resolve 之后的每一步（blit、截图）因此完全不必分情况。
+    colorAttachment.imageView = multisampled ? colorMs_.view : color_.view;
     colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    if (multisampled) {
+        colorAttachment.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+        colorAttachment.resolveImageView = color_.view;
+        colorAttachment.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    }
     colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachment.clearValue.color = {{view.background.r, view.background.g, view.background.b,
@@ -417,20 +456,29 @@ void Renderer::RecordFrame(VkCommandBuffer cmd, const RenderView& view,
     // before the solids lets the depth test resolve the rest normally. Then
     // solids, then the feature edges that sit on them, then wires and points,
     // then the overlay, which is not depth tested at all.
+    const PassSet& passes = *passes_;
+    GpuScene& geometry = system_->Geometry();
+
     if (view.showGrid) {
-        system_->Grid().Record(cmd);
+        passes.grid.Record(cmd);
     }
     if (view.drawSurfaces) {
-        system_->Mesh().Record(cmd, layout, system_->Geometry(), snapshot, view);
+        passes.mesh.Record(cmd, layout, geometry, snapshot, view);
+    }
+    // 被遮挡的那一遍先画：它不写深度，而且要的正是「输给已有深度」的片元，所以
+    // 深度缓冲里必须已经有实体，而可见的那一遍还没盖上去。
+    if (view.drawOccluded) {
+        passes.edges.RecordOccluded(cmd, layout, geometry, snapshot, view);
+        passes.lines.RecordOccluded(cmd, layout, geometry, snapshot, view);
     }
     if (view.drawEdges) {
-        system_->Edges().Record(cmd, layout, system_->Geometry(), snapshot, view);
+        passes.edges.Record(cmd, layout, geometry, snapshot, view);
     }
-    system_->Lines().Record(cmd, layout, system_->Geometry(), snapshot, view);
-    system_->Points().Record(cmd, layout, system_->Geometry(), snapshot, view);
+    passes.lines.Record(cmd, layout, geometry, snapshot, view);
+    passes.points.Record(cmd, layout, geometry, snapshot, view);
 
-    system_->Lines().RecordOverlay(cmd, layout, frame.overlayLines.handle, overlayLineRuns_);
-    system_->Points().RecordOverlay(cmd, layout, frame.overlayPoints.handle, overlayPointRuns_);
+    passes.lines.RecordOverlay(cmd, layout, frame.overlayLines.handle, overlayLineRuns_);
+    passes.points.RecordOverlay(cmd, layout, frame.overlayPoints.handle, overlayPointRuns_);
 
     vkCmdEndRendering(cmd);
 
@@ -451,7 +499,7 @@ void Renderer::RecordFrame(VkCommandBuffer cmd, const RenderView& view,
 
 CgResult Renderer::Render(const RenderView& view, const SceneSnapshot& snapshot,
                           const OverlayData& overlay) {
-    if (!system_ || !system_->Context().IsValid()) {
+    if (!system_ || !system_->Context().IsValid() || !passes_) {
         return core::SetError(CgResult::InvalidState, "Render() on an uninitialised viewport");
     }
 
@@ -649,6 +697,7 @@ void Renderer::Shutdown() {
     if (!system_ || !system_->Context().IsValid()) {
         system_ = nullptr;
         surface_ = nullptr;
+        passes_ = nullptr;
         return;
     }
 
@@ -665,6 +714,7 @@ void Renderer::Shutdown() {
 
     system_ = nullptr;
     surface_ = nullptr;
+    passes_ = nullptr;
     hasRenderedFrame_ = false;
 }
 

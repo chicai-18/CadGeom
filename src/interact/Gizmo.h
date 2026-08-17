@@ -25,6 +25,7 @@ namespace cadgeom::interact {
 enum class GizmoMode : int32_t {
     Translate = 0,  ///< 三根轴向箭头 + 三个平面方块
     Rotate,         ///< 三个圆环
+    Scale,          ///< 三根轴向标尺 + 原点上的等比手柄
 };
 
 /// @brief Gizmo 上可以抓的部位。平面手柄以它的法线轴命名。
@@ -36,6 +37,7 @@ enum class GizmoHandle : int32_t {
     PlaneYZ,  ///< 法线 = X
     PlaneZX,  ///< 法线 = Y
     PlaneXY,  ///< 法线 = Z
+    Uniform,  ///< 只有缩放模式有：抓原点，三轴同时缩放
 };
 
 class Gizmo {
@@ -57,13 +59,14 @@ public:
     bool BeginDrag(const ICamera& camera, GizmoHandle handle, double x, double y);
 
     /// @brief 自 BeginDrag 以来的累计增量。
-    /// @param translation 平移模式下的世界位移；旋转模式下为零。
-    /// @param rotation    旋转模式下绕手柄轴、过 Origin() 的旋转；平移模式下为
+    /// @param translation 平移模式下的世界位移；其余模式下为零。
+    /// @param rotation    旋转模式下绕手柄轴、过 Origin() 的旋转；其余模式下为
     ///                    单位四元数。
+    /// @param scale       缩放模式下过 Origin() 的各轴倍率；其余模式下为 (1,1,1)。
     /// @return false 表示这一次鼠标位置解不出来（射线与拖拽平面平行），增量保持
     ///         上一次的值，拖拽不中断。
-    bool UpdateDrag(const ICamera& camera, double x, double y, Vec3d& translation,
-                    Quatd& rotation);
+    bool UpdateDrag(const ICamera& camera, double x, double y, Vec3d& translation, Quatd& rotation,
+                    Vec3d& scale);
 
     void EndDrag() { dragging_ = false; }
     bool IsDragging() const { return dragging_; }
@@ -95,6 +98,10 @@ private:
     Vec3d refV_{0.0, 1.0, 0.0};
     double lastAngle_{0.0};
     double totalAngle_{0.0};
+
+    /// 等比缩放：按下时光标离原点有多少像素。倍率就是「现在多远 / 当时多远」——
+    /// 屏幕距离之比在正交和透视下都是同一件事，用不着知道自己在哪种投影里。
+    double startPixelDistance_{0.0};
 };
 
 } // namespace cadgeom::interact
