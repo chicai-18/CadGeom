@@ -1,0 +1,197 @@
+# 推一个 v 开头的标签就出一个 Release。
+#
+# 真正干活的是 scripts/package.ps1 —— 本文件只负责把机器准备好（Vulkan SDK、
+# Qt），然后调它。所以「推标签之前先在本地跑一遍」验证的是同一条路径：
+#
+#   pwsh scripts/package.ps1 -QtPrefix D:/Qt/5.15.2/msvc2019_64
+#
+# 不想真打标签也能试：Actions 页面上手动跑 workflow_dispatch，它会把包传成
+# artifact，但不建 Release。
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（不带 v）。留空就用 CMakeLists.txt 里的 project(VERSION)'
+        required: false
+        default: ''
+
+# gh release create 要写仓库内容。
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # 钉死版本，Release 才可复现。要升就改这里 —— 最新版见
+  # https://vulkan.lunarg.com/sdk/latest.json
+  VULKAN_SDK_VERSION: '1.4.357.0'
+  # aqt 的 arch 名和它解出来的目录名不一样，下面两个都要用。
+  QT_VERSION: '5.15.2'
+  QT_AQT_ARCH: 'win64_msvc2019_64'
+  QT_DIR_ARCH: 'msvc2019_64'
+
+jobs:
+  windows:
+    name: Windows x64
+    # 钉死镜像：脚本里的生成器写死是 "Visual Studio 17 2022"。
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 检出（含子模块）
+        uses: actions/checkout@v4
+        with:
+          # external/ 下七个子模块都是构建必需的，少一个 CMake 直接 FATAL_ERROR。
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: 解析版本号
+        id: ver
+        run: |
+          $v = '${{ inputs.version }}'
+          if (-not $v -and $env:GITHUB_REF -like 'refs/tags/*') {
+              $v = $env:GITHUB_REF -replace '^refs/tags/v?', ''
+          }
+          if (-not $v) {
+              $m = Select-String -Path CMakeLists.txt `
+                                 -Pattern '^\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)\s*$' |
+                   Select-Object -First 1
+              $v = $m.Matches[0].Groups[1].Value
+          }
+          Write-Host "版本号：$v"
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: 安装 Vulkan SDK
+        run: |
+          $ver = '${{ env.VULKAN_SDK_VERSION }}'
+          $url = "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkansdk-windows-X64-$ver.exe"
+          $exe = Join-Path $env:RUNNER_TEMP 'vulkan_sdk.exe'
+
+          Write-Host "下载 $url"
+          curl.exe -L --fail --retry 3 --retry-delay 5 --retry-all-errors -o $exe $url
+          if ($LASTEXITCODE -ne 0) { throw "下载 Vulkan SDK 失败 ($LASTEXITCODE)" }
+
+          # Qt IFW 的静默安装三件套。默认组件就够 —— 我们只要头文件、loader 和
+          # glslc（着色器是编进 DLL 的，没有 glslc 就没有渲染器）。
+          $root = "C:\VulkanSDK\$ver"
+          Write-Host "安装到 $root"
+          $p = Start-Process -FilePath $exe -Wait -PassThru -ArgumentList @(
+              '--root', $root,
+              '--accept-licenses',
+              '--default-answer',
+              '--confirm-command',
+              'install')
+          if ($p.ExitCode -ne 0) { throw "Vulkan SDK 安装失败 ($($p.ExitCode))" }
+
+          $glslc = Join-Path $root 'Bin\glslc.exe'
+          if (-not (Test-Path $glslc)) { throw "装完了却没有 glslc：$glslc" }
+
+          Add-Content -Path $env:GITHUB_ENV  -Value "VULKAN_SDK=$root"
+          Add-Content -Path $env:GITHUB_PATH -Value "$root\Bin"
+
+      # Qt 只影响 qt_viewer 这一个示例。装不上就少一个示例，不该拦住整个
+      # Release —— CMake 找不到 Qt 会自己跳过那个子目录。
+      - name: 安装 Qt（可选）
+        id: qt
+        continue-on-error: true
+        run: |
+          python -m pip install --disable-pip-version-check --quiet aqtinstall
+          if ($LASTEXITCODE -ne 0) { throw "装 aqtinstall 失败" }
+
+          aqt install-qt windows desktop '${{ env.QT_VERSION }}' '${{ env.QT_AQT_ARCH }}' `
+              --outputdir C:\Qt
+          if ($LASTEXITCODE -ne 0) { throw "aqt install-qt 失败" }
+
+          $prefix = 'C:\Qt\${{ env.QT_VERSION }}\${{ env.QT_DIR_ARCH }}'
+          if (-not (Test-Path (Join-Path $prefix 'bin\windeployqt.exe'))) {
+              throw "$prefix 下没有 windeployqt"
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value "QT_PREFIX=$prefix"
+
+      - name: 构建、测试、打包
+        run: |
+          $pkgArgs = @('-Version', '${{ steps.ver.outputs.version }}')
+          if ($env:QT_PREFIX) {
+              $pkgArgs += @('-QtPrefix', $env:QT_PREFIX)
+          } else {
+              Write-Warning 'Qt 没装上，这个包里不会有 qt_viewer'
+          }
+          ./scripts/package.ps1 @pkgArgs
+
+      # 手动跑（workflow_dispatch）时，包只到这里为止；标签触发的才往下走。
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CadGeom-${{ steps.ver.outputs.version }}-windows-x64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 写 Release 说明
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          $sums = Get-Content dist/SHA256SUMS.txt
+          $lines = @(
+              "## CadGeom $v",
+              '',
+              '嵌入式 Vulkan CAD 3D 引擎，一个共享库加一套 COM 风格 C++ 接口。',
+              '',
+              '### 下载哪个',
+              '',
+              "| 文件 | 内容 |",
+              "| --- | --- |",
+              "| ``CadGeom-$v-windows-x64.zip`` | 二进制包。``cadgeom.dll``、导入库、公共头文件、``find_package(CadGeom)`` 用的 cmake 配置、``glfw_viewer`` 和 ``qt_viewer`` 两个示例，以及它们的运行时依赖（MSVC 运行时、Qt）。解开就能跑。 |",
+              "| ``CadGeom-$v-src-with-submodules.zip`` | 源码包，含 ``external/`` 下全部子模块。GitHub 自动生成的 Source code 不含子模块，那份是构建不了的。 |",
+              '',
+              '### 用起来',
+              '',
+              '```cmake',
+              'find_package(CadGeom REQUIRED PATHS <解压目录>/lib/cmake/CadGeom)',
+              'target_link_libraries(my_host PRIVATE CadGeom::cadgeom)',
+              '```',
+              '',
+              '### 运行时要求',
+              '',
+              '- Windows x64。',
+              '- 一块支持 Vulkan 1.3 的显卡和它的驱动。`vulkan-1.dll` 故意没打进包里 —— 它属于驱动，装在 `System32`，往 exe 边上塞一个旧 loader 只会盖掉系统里更新的那个。',
+              '- MSVC 运行时已随包附带，不必另外装 vc_redist。',
+              '',
+              '### 校验',
+              '',
+              '```',
+              ($sums -join "`n"),
+              '```',
+              '',
+              "构建环境：Vulkan SDK ${{ env.VULKAN_SDK_VERSION }}，Qt ${{ env.QT_VERSION }}，MSVC 2022，Release。"
+          )
+          $lines | Set-Content -Path release-notes.md -Encoding utf8
+
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $files = @(Get-ChildItem dist -File | ForEach-Object { $_.FullName })
+          Write-Host "上传 $($files.Count) 个文件到 $tag"
+
+          $ghArgs = @('release', 'create', $tag) + $files + @(
+              '--title', "CadGeom $tag",
+              '--notes-file', 'release-notes.md',
+              '--verify-tag')
+          # 带后缀的标签（v0.2.0-rc1）当预发布。
+          if ($tag -match '-') { $ghArgs += '--prerelease' }
+
+          gh @ghArgs
+          if ($LASTEXITCODE -ne 0) { throw "gh release create 失败 ($LASTEXITCODE)" }

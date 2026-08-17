@@ -1,8 +1,12 @@
 # Build trees
 build/
+build-*/
 out/
 install/
 cmake-build-*/
+
+# scripts/package.ps1 的产物
+dist/
 
 # IDE
 .vs/

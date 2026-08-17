@@ -20,6 +20,13 @@ option(CADGEOM_BUILD_EXAMPLES "Build the standalone viewer demo" ON)
 option(CADGEOM_BUILD_TESTS    "Build the unit tests" ON)
 option(CADGEOM_ENABLE_VULKAN  "Build the Vulkan renderer (needs the Vulkan SDK)" ON)
 option(CADGEOM_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(CADGEOM_INSTALL_EXAMPLES "Install the viewer demos alongside the library" ON)
+
+# 发布包文件名里的版本号。默认跟 project() 一致；CI 从标签里取，并且要求两者
+# 的数字部分对得上（scripts/package.ps1 会先检查），免得 v0.2.0 的包里装着一个
+# 自称 0.1.0 的 CadGeomConfigVersion.cmake。
+set(CADGEOM_PACKAGE_VERSION "${PROJECT_VERSION}" CACHE STRING
+    "Version string used in the package file name")
 
 if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
     # Keep the DLL beside every executable that loads it, so tests and the demo
@@ -330,9 +337,68 @@ install(FILES
     "${CMAKE_CURRENT_BINARY_DIR}/CadGeomConfigVersion.cmake"
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/CadGeom)
 
+# 符号表。Release 配置不生成 pdb，所以是 OPTIONAL —— 但用 RelWithDebInfo 打的
+# 包会带上它，宿主进程里 cadgeom.dll 崩了才有得看。
+if(MSVC)
+    install(FILES "$<TARGET_PDB_FILE:cadgeom>"
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
+        OPTIONAL)
+endif()
+
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/README.md" DESTINATION .)
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/docs/architecture.md" DESTINATION docs)
+
+# ---------------------------------------------------------------------------
+# Package - cpack -G ZIP，解开就能用的一份
+#
+# 「所有依赖」在这里是有边界的：GLFW、VMA、tinygltf、tinyobjloader 都编译进了
+# cadgeom.dll，不是运行时依赖；剩下真正要跟着走的是 MSVC 运行时和 Qt，两者都在
+# 下面带上了。vulkan-1.dll 故意不带 —— 它属于显卡驱动，装在 System32 里，往 exe
+# 边上放一个旧 loader 只会盖掉系统里更新的那个。
+# ---------------------------------------------------------------------------
+
+if(WIN32)
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION ${CMAKE_INSTALL_BINDIR})
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP FALSE)
+    include(InstallRequiredSystemLibraries)
+endif()
+
+if(WIN32)
+    set(CADGEOM_PACKAGE_SYSTEM "windows")
+elseif(APPLE)
+    set(CADGEOM_PACKAGE_SYSTEM "macos")
+else()
+    set(CADGEOM_PACKAGE_SYSTEM "linux")
+endif()
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(CADGEOM_PACKAGE_ARCH "x64")
+else()
+    set(CADGEOM_PACKAGE_ARCH "x86")
+endif()
+
+set(CPACK_PACKAGE_NAME "CadGeom")
+set(CPACK_PACKAGE_VENDOR "CadGeom")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${PROJECT_DESCRIPTION}")
+set(CPACK_PACKAGE_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
+set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
+set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
+set(CADGEOM_PACKAGE_FILE_NAME
+    "CadGeom-${CADGEOM_PACKAGE_VERSION}-${CADGEOM_PACKAGE_SYSTEM}-${CADGEOM_PACKAGE_ARCH}")
+# include(CPack) 会回头改写 CPACK_PACKAGE_FILE_NAME，所以下面报告用的是自己那份。
+set(CPACK_PACKAGE_FILE_NAME "${CADGEOM_PACKAGE_FILE_NAME}")
+# 解压出来是一个带版本号的目录，而不是把 bin/ include/ 倒进当前目录。
+set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY 1)
+set(CPACK_GENERATOR "ZIP")
+set(CPACK_ARCHIVE_COMPONENT_INSTALL OFF)
+set(CPACK_SOURCE_GENERATOR "")   # 源码包由 scripts/package.ps1 出，它要带上子模块
+set(CPACK_VERBATIM_VARIABLES ON)
+include(CPack)
+
 # ---------------------------------------------------------------------------
 
 message(STATUS "CadGeom ${PROJECT_VERSION}")
 message(STATUS "  Vulkan renderer : ${CADGEOM_ENABLE_VULKAN}")
 message(STATUS "  Examples        : ${CADGEOM_BUILD_EXAMPLES}")
 message(STATUS "  Tests           : ${CADGEOM_BUILD_TESTS}")
+message(STATUS "  Package name    : ${CADGEOM_PACKAGE_FILE_NAME}.zip")

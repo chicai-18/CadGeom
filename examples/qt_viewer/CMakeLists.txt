@@ -57,20 +57,51 @@ endif()
 # Windows 上把 Qt 的运行时拷到输出目录，构建完就能双击运行 —— 否则要么改 PATH，
 # 要么对着一个「缺少 Qt5Widgets.dll」的弹窗发呆。
 option(CADGEOM_QT_DEPLOY "Run windeployqt after building qt_viewer" ON)
-if(WIN32 AND CADGEOM_QT_DEPLOY)
+if(WIN32)
+    # 找一次，构建后和安装时都用它：前者让构建树能直接双击运行，后者让发布包
+    # 解开就能运行。CADGEOM_QT_DEPLOY 只关掉前者 —— 发布包里少了 Qt 运行时就
+    # 不叫发布包了。
     get_target_property(_cadgeom_qmake Qt${QT_VERSION_MAJOR}::qmake IMPORTED_LOCATION)
     if(_cadgeom_qmake)
         get_filename_component(_cadgeom_qt_bin "${_cadgeom_qmake}" DIRECTORY)
         find_program(CADGEOM_WINDEPLOYQT windeployqt HINTS "${_cadgeom_qt_bin}")
-        if(CADGEOM_WINDEPLOYQT)
-            add_custom_command(TARGET qt_viewer POST_BUILD
-                COMMAND "${CADGEOM_WINDEPLOYQT}"
-                        --no-translations
-                        --no-compiler-runtime
-                        --no-system-d3d-compiler
-                        "$<TARGET_FILE:qt_viewer>"
-                COMMENT "windeployqt qt_viewer"
-                VERBATIM)
-        endif()
+    endif()
+endif()
+
+if(WIN32 AND CADGEOM_QT_DEPLOY AND CADGEOM_WINDEPLOYQT)
+    add_custom_command(TARGET qt_viewer POST_BUILD
+        COMMAND "${CADGEOM_WINDEPLOYQT}"
+                --no-translations
+                --no-compiler-runtime
+                --no-system-d3d-compiler
+                "$<TARGET_FILE:qt_viewer>"
+        COMMENT "windeployqt qt_viewer"
+        VERBATIM)
+endif()
+
+# ---------------------------------------------------------------------------
+# 安装 —— 进 CPack 的那份拷贝
+# ---------------------------------------------------------------------------
+
+if(CADGEOM_INSTALL_EXAMPLES)
+    install(TARGETS qt_viewer RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+    if(WIN32 AND CADGEOM_WINDEPLOYQT)
+        # windeployqt 认的是可执行文件本身，所以只能在 exe 装进去之后再跑；
+        # install(CODE) 的执行顺序跟声明顺序一致，上面那条 install(TARGETS)
+        # 已经把它放好了。--dir 指向同一个 bin/，插件目录（platforms/ 等）
+        # 也一并落在那里，Qt 才找得到它们。
+        install(CODE "
+set(_qt_dir \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
+message(STATUS \"windeployqt -> \${_qt_dir}\")
+execute_process(
+    COMMAND \"${CADGEOM_WINDEPLOYQT}\"
+            --no-translations --no-compiler-runtime --no-system-d3d-compiler
+            --dir \"\${_qt_dir}\" \"\${_qt_dir}/qt_viewer.exe\"
+    RESULT_VARIABLE _qt_rc)
+if(NOT _qt_rc EQUAL 0)
+    message(FATAL_ERROR \"windeployqt failed with \${_qt_rc}\")
+endif()
+")
     endif()
 endif()

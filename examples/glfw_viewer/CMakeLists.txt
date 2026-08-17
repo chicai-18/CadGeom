@@ -30,3 +30,8 @@ else()
 endif()
 
 set_target_properties(glfw_viewer PROPERTIES FOLDER "examples")
+
+# 它链接的只有 cadgeom，而 GLFW 是静态进 DLL 的，所以这里没有额外运行时要带。
+if(CADGEOM_INSTALL_EXAMPLES)
+    install(TARGETS glfw_viewer RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()

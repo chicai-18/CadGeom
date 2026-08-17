@@ -64,6 +64,38 @@ git submodule.
 | `CADGEOM_BUILD_EXAMPLES` | `ON` | The standalone demo. |
 | `CADGEOM_ENABLE_VULKAN` | `ON` | Auto-disabled when no SDK is found. |
 | `CADGEOM_WARNINGS_AS_ERRORS` | `OFF` | |
+| `CADGEOM_INSTALL_EXAMPLES` | `ON` | Put the viewers in `install`/the release package. |
+
+## Releases
+
+Pushing a `v*` tag builds a release: `.github/workflows/release.yml` provisions
+the Vulkan SDK and Qt, then hands over to `scripts/package.ps1`. That script is
+the whole of the packaging logic, so a release can be rehearsed locally against
+the same code path CI runs:
+
+```sh
+pwsh scripts/package.ps1 -QtPrefix D:/Qt/5.15.2/msvc2019_64
+```
+
+It configures, builds, runs the tests, and writes two archives into `dist/`:
+
+| | |
+|---|---|
+| `CadGeom-<ver>-windows-x64.zip` | `cadgeom.dll`, the import library, the public headers, the `find_package(CadGeom)` config, both viewers, and the runtime they need — Qt and the MSVC redistributable. Unzip and run. |
+| `CadGeom-<ver>-src-with-submodules.zip` | The source with `external/` filled in. GitHub's own "Source code" archive leaves the submodules out, and that one does not build. |
+
+`vulkan-1.dll` is deliberately not shipped. It belongs to the graphics driver and
+lives in `System32`; a loader sitting next to the executable would only shadow a
+newer one already on the machine.
+
+The tag drives the package name, so `project(VERSION ...)` has to be bumped
+before tagging — the script compares the two and refuses a `v0.2.0` tag on a tree
+that still says `0.1.0`. A suffix is allowed (`v0.2.0-rc1` matches `0.2.0` and is
+published as a prerelease).
+
+To exercise the workflow without cutting a release, run it from the Actions tab:
+`workflow_dispatch` uploads the archives as a build artifact and creates no
+GitHub release.
 
 ## Using it from a host
 
